@@ -1,0 +1,4 @@
+rootProject.name = "sip-parent"
+
+include("micronaut-sip")
+include("sip-app")

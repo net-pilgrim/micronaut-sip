@@ -1,0 +1,272 @@
+# Testing
+
+## Automated Test Suites & Quality Assurance Architecture
+
+The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **130 automated JVM tests** across both Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
+
+```mermaid
+flowchart TD
+    L4["<b>Layer 4: Performance & Load Benchmarks</b><br/>SIPp v3.7 sustained 15,000 calls @ 50 cps & 1,000 burst calls @ 200 cps<br/>+ Netem loss benchmarks (20% & 30% packet loss)"]
+    L3["<b>Layer 3: Protocol Conformance Testing</b><br/>ETSI TS 102 027-2 specification suite executed via sip-tt (100% passing)"]
+    L2["<b>Layer 2: Full-Stack Network Integration Tests</b><br/>:sip-app (28 tests over live Netty UDP datagram and TCP streaming sockets)"]
+    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (82 tests: parsers, fuzzers, rate limiters, timers, filters, sessions)"]
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+```
+
+### Test Suites Summary (130 Automated Tests)
+
+| Module | Test Suite Class | Tests | Primary Focus & Target Specifications |
+| :--- | :--- | :---: | :--- |
+| `:micronaut-sip` | [`SipParserTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipParserTest.java) | 5 | RFC 3261 §7 & §19 message syntax, header unfolding, compact alias mappings, URI parsing |
+| `:micronaut-sip` | [`SipEncoderTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipEncoderTest.java) | 2 | Wire-level serialization, RFC 3261 §8.2.6 response construction, Via ordering, To-tag generation |
+| `:micronaut-sip` | [`SipParserFuzzTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipParserFuzzTest.java) | 7 | RFC 3261 §21.5.2 DoS bounds enforcement (`513 Message Too Large`), random payload fuzzing |
+| `:micronaut-sip` | [`SipFilterTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipFilterTest.java) | 6 | Reactive interceptor pipeline SPI, `@SipFilter` ordering, request/response mutation, short-circuiting |
+| `:micronaut-sip` | [`SipRateLimitTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRateLimitTest.java) | 7 | Token-bucket rate limiter, RFC 3261 §21.5.4 `503 Service Unavailable`, `Retry-After`, silent ACK drop |
+| `:micronaut-sip` | [`SipMdcFilterTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipMdcFilterTest.java) | 1 | SLF4J MDC context population with Call-ID, CSeq, method, and deterministic reactive cleanup |
+| `:micronaut-sip` | [`SipMetricsTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipMetricsTest.java) | 4 | Micrometer counters, request duration timers, session gauges, rejection tracking |
+| `:micronaut-sip` | [`SipCancelTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipCancelTest.java) | 3 | RFC 3261 §9.2 / §17.2.3 CANCEL transaction matching, 200 OK to CANCEL + 487 emission, 481 handling |
+| `:micronaut-sip` | [`SipErrorAndTryingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipErrorAndTryingTest.java) | 3 | `@SipError` inheritance hierarchy matching, non-blocking 200ms `100 Trying` timer |
+| `:micronaut-sip` | [`ViaHeaderTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/ViaHeaderTest.java) | 8 | RFC 3581 `rport`, RFC 3261 §18.2.1 `received` IP spoofing mitigation, response destination resolution |
+| `:micronaut-sip` | [`SipSessionManagerTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipSessionManagerTest.java) | 4 | Stateful dialog transitions, touch timestamps, TTL expiration, bounded LRU cap eviction |
+| `:micronaut-sip` | [`SipRouteBindingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRouteBindingTest.java) | 2 | Controller parameter binding annotations (`@SipCallId`, `@SipFrom`, `@SipParam`, etc.) |
+| `:micronaut-sip` | [`SipServerHealthIndicatorTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipServerHealthIndicatorTest.java) | 2 | Micronaut Management `/health` endpoint integration for UDP/TCP server and session metrics |
+| `:micronaut-sip` | [`SipTimerTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipTimerTest.java) | 28 | RFC 3261 timers: Timer A & E retransmissions, Timer B & F, Timer D ACK resend, Timer G & H UAS 2xx, Timer J replay, auto 100 Trying, TTL, virtual time, race conditions |
+| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 19 | Live UDP network call flows, SDP negotiation, registration, options, 400/405/420, netem packet drop & retransmission resilience |
+| `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 6 | End-to-end TCP streaming network call flows, framing reassembly, persistent reuse, RFC 5626 keep-alive |
+| `:sip-app` | [`SipAppTest`](../sip-app/src/test/java/net/pilgrim/SipAppTest.java) | 3 | Micronaut application context DI, compile-time route processor, duplicate route collision prevention |
+| Compatibility Suites | `com.example.*` (Legacy test coverage) | 20 | Backward-compatibility regression verification for parser, encoder, and TCP/UDP integration flows |
+
+---
+
+### Detailed Breakdown: `:micronaut-sip` Unit & Component Suites (82 Tests)
+
+#### 1. [`SipParserTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipParserTest.java) (5 Tests)
+- **`testParseStandardInvite`**: Verifies zero-copy string parsing of an RFC 3261 standard `INVITE` datagram, verifying Request-URI, method, SIP version, headers (`Via`, `From`, `To`, `Call-ID`, `CSeq`, `Contact`, `Content-Type`, `Content-Length`), and SDP body payload extraction.
+- **`testParseResponse`**: Tests response parsing including SIP status code (`200`), reason phrase (`OK`), and preservation of multiple header values.
+- **`testHeaderUnfolding`**: Enforces RFC 3261 §7.3.1 header line unfolding: multi-line header fields separated by CRLF followed by spaces or tabs (`\r\n\s` or `\r\n\t`) are seamlessly concatenated into a single logical header value.
+- **`testCompactHeaders`**: Validates bidirectional compact header alias translation according to RFC 3261 Table 1 (`v` -> `Via`, `f` -> `From`, `t` -> `To`, `i` -> `Call-ID`, `m` -> `Contact`, `c` -> `Content-Type`, `l` -> `Content-Length`, `s` -> `Subject`, `k` -> `Supported`, etc.).
+- **`testSipUriParsing`**: Tests full parsing of `sip:` and `sips:` URIs into userinfo, password, host, port (IPv4 and bracketed IPv6), URI parameters (`transport=udp`, `lr`), and embedded query headers.
+
+#### 2. [`SipEncoderTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipEncoderTest.java) (2 Tests)
+- **`testEncodeAndDecodeRequest`**: Asserts round-trip lossless encoding and decoding of SIP requests with bodies, verifying exact `Content-Length` synchronization and CRLF line terminations.
+- **`testCreateResponseRfc3261Compliance`**: Validates strict RFC 3261 §8.2.6 compliance during response generation via `SipRequest.createResponse(...)`:
+  - Preserves incoming `Via` header stack in exact order (including branch tokens and transport designations).
+  - Copies `From` and `Call-ID` unchanged.
+  - Matches `CSeq` sequence number and method.
+  - Generates a cryptographically random hexadecimal `To` tag (§8.2.6.2) for provisional/final responses while strictly omitting tags for `100 Trying`.
+
+#### 3. [`SipParserFuzzTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipParserFuzzTest.java) (7 Tests)
+- **`testMalformedInputsFailGracefully`**: Verifies that truncated, malformed, or garbage byte sequences return `null` or parse errors rather than throwing unchecked JVM runtime exceptions.
+- **`testMessageTooLargeEnforcement`**: Validates RFC 3261 §21.5.2 DoS bounds: incoming packets exceeding `sip.server.max-message-size-bytes` (default 64 KB) are rejected with `513 Message Too Large`.
+- **`testMaxHeaderCountEnforcement`**: Verifies rejection when incoming packets contain more than `sip.server.max-header-count` (default 100 headers), preventing algorithmic complexity attacks.
+- **`testMaxHeaderSizeEnforcement`**: Validates rejection of oversized individual header lines exceeding `sip.server.max-header-size-bytes` (default 8 KB).
+- **`testRandomFuzzingNeverCrashesWithUnexpectedExceptions`**: Executes 200 random byte-array permutations through the parser to ensure complete panic-freedom and memory safety.
+- **`testValidRequestWithBodyAndFoldedHeaders`**: Confirms that complex valid packets combining folded headers, compact aliases, and payload bodies parse cleanly.
+- **`testValidResponseParsing`**: Confirms standard response parsing across 1xx, 2xx, 4xx, and 5xx status codes.
+
+#### 4. [`SipFilterTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipFilterTest.java) (6 Tests)
+- **`testFilterExecutionOrder`**: Verifies that multiple registered `SipServerFilter` beans are executed strictly in order based on `Ordered.getOrder()` and `@SipFilter(order = ...)`.
+- **`testRequestMutationInFilter`**: Validates that upstream filters can inspect and mutate request headers (e.g., adding `X-Correlation-Id`) prior to controller dispatch.
+- **`testResponseMutationInFilter`**: Validates that filters can intercept and mutate downstream responses reactively (e.g., injecting security headers).
+- **`testShortCircuitingFilter`**: Confirms that a filter can short-circuit the execution chain (e.g., returning `403 Forbidden` on missing credentials) without invoking subsequent filters or controller methods.
+- **`testMethodSpecificFilterWithAnnotation`**: Tests `@SipFilter(methods = {SipMethod.INVITE})` targeting: the filter only intercepts `INVITE` requests and transparently bypasses `REGISTER` or `OPTIONS`.
+- **`testFilterMultiResponseStreaming`**: Verifies that filters correctly handle reactive `Publisher<SipResponse>` streams emitting multiple provisional and final responses (such as `180 Ringing` followed by `200 OK`).
+
+#### 5. [`SipRateLimitTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRateLimitTest.java) (7 Tests)
+- **`testRequestsAllowedWithinBurst`**: Verifies that requests arriving within the configured token-bucket burst limit (`sip.server.rate-limit.burst-capacity`) pass through unimpeded.
+- **`testRejectionWhenBurstExceeded`**: Enforces RFC 3261 §21.5.4 overload protection: once tokens are depleted, subsequent requests are rejected with `503 Service Unavailable` accompanied by a `Retry-After: <seconds>` header.
+- **`testAckDroppedSilentlyWhenRateLimited`**: Enforces RFC 3261 §17.2.1 compliance: rate-limited `ACK` requests are dropped silently with `Mono.empty()` without generating an error response, preventing UDP storm loops.
+- **`testExactIpWhitelistBypassesRateLimit`**: Confirms that exact IP addresses specified in `sip.server.rate-limit.whitelist` (e.g. `127.0.0.1`, `::1`) bypass rate limiting completely.
+- **`testCidrSubnetWhitelistBypassesRateLimit`**: Confirms that CIDR subnet blocks (e.g. `10.0.0.0/8`, `192.168.0.0/16`) are correctly parsed by `IpMatcher` and exempted from rate limits.
+- **`testIpMatcherDirect`**: Unit tests IPv4 and IPv6 subnet matching logic across boundary conditions.
+- **`testIpRateLimiterEviction`**: Verifies bounded cache memory protection: tracks that idle IP entries are purged when cache size exceeds `sip.server.rate-limit.max-tracked-ips` (default 10,000).
+
+#### 6. [`SipMdcFilterTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipMdcFilterTest.java) (1 Test)
+- **`testMdcPopulatedInsideHandlerAndClearedAfterwards`**: Verifies that `SipMdcFilter` populates SLF4J MDC context with `sip.callId`, `sip.cseq`, `sip.method`, `sip.from`, and `sip.to` during controller execution, and deterministically cleans up all keys upon completion via reactive `doFinally()`.
+
+#### 7. [`SipMetricsTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipMetricsTest.java) (4 Tests)
+- **`testDirectMetricsRecording`**: Validates direct Micrometer counter increments and timer latency sampling.
+- **`testGaugesForSessionsAndTransport`**: Verifies dynamic gauge reporting for active dialog session count and transport channel readiness.
+- **`testDispatcherInstrumentsRequestsAndResponses`**: Verifies that `SipDispatcher` automatically instruments incoming requests (`sip.server.requests` tagged by method and transport) and outgoing responses (`sip.server.responses` tagged by method, status code, status family, and transport).
+- **`testDispatcherInstrumentsRejections`**: Verifies counter tracking for rejected requests (`sip.server.rejected` tagged by reason, such as `bad_request`, `method_not_allowed`, `bad_extension`).
+
+#### 8. [`SipCancelTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipCancelTest.java) (3 Tests)
+- **`testCancelMatchingPendingInviteEmits200And487`**: Enforces RFC 3261 §9.2 and §17.2.3: an incoming `CANCEL` matching an in-flight `INVITE` transaction emits `200 OK` to the CANCEL, aborts the pending reactive `INVITE` pipeline, and emits `487 Request Terminated` to the caller.
+- **`testCancelNonExistentTransactionReturns481`**: Verifies RFC 3261 §9.2: sending a `CANCEL` with an unknown `branch` or `Call-ID` immediately yields `481 Call/Transaction Does Not Exist`.
+- **`testCancelAfterFinalResponseReturns481`**: Verifies that a `CANCEL` received after a final response (`200 OK`) has already been dispatched returns `481 Call/Transaction Does Not Exist`.
+
+#### 9. [`SipErrorAndTryingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipErrorAndTryingTest.java) (3 Tests)
+- **`testSipErrorHierarchyMatching`**: Verifies declarative `@SipError` exception mapping, confirming that specific subclass handlers take precedence over general parent exception handlers.
+- **`testAuto100TryingEmittedWhenProcessingExceedsThreshold`**: Verifies RFC 3261 §17.2.1: when controller processing takes longer than `sip.server.trying-delay-ms` (default 200 ms), a non-blocking reactive timer automatically emits `100 Trying` to suppress client UDP retransmissions.
+- **`testAuto100TryingNotEmittedWhenResponseIsFast`**: Confirms that if controller processing finishes before the threshold, `100 Trying` is suppressed to conserve network bandwidth.
+
+#### 10. [`ViaHeaderTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/ViaHeaderTest.java) (8 Tests)
+- **`testParseStandardVia`**: Parses standard IPv4 UDP Via header with branch token.
+- **`testParseIpv6Via`**: Parses bracketed IPv6 Via header (`[::1]:5060`).
+- **`testParseHostWithoutPort`**: Verifies fallback to default SIP port 5060 when no explicit port is declared.
+- **`testRportFlagAndValue`**: Verifies RFC 3581 parsing for empty `rport` flag and populated `rport=port` values.
+- **`testResolveResponseAddress`**: Validates response routing destination precedence: `rport` + `received` overrides `sent-by`.
+- **`testProcessNatViaHostMismatch`**: Confirms that when `sent-by` host does not match physical packet source address, `received` parameter is automatically inserted.
+- **`testProcessNatViaRportPopulated`**: Confirms that when client requests symmetric routing with empty `rport`, server populates `rport=<source-port>`.
+- **`testProcessNatViaSpoofingMitigation`**: Validates spoofed IP mitigation: prevents malicious clients from redirecting responses by overriding `sent-by`.
+
+#### 11. [`SipSessionManagerTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipSessionManagerTest.java) (4 Tests)
+- **`testSessionCreationAndTouch`**: Validates session initialization and `touch()` updating last-accessed timestamp.
+- **`testSessionExpirationWithTtl`**: Validates automated expiration and removal of inactive sessions exceeding `sip.server.session-ttl-ms`.
+- **`testMaxSessionCapacityAndEviction`**: Enforces bounded LRU eviction: when session count reaches `sip.server.max-sessions`, least-recently used sessions are evicted to prevent memory exhaustion.
+- **`testEvictTerminatedSessions`**: Verifies immediate cleanup of sessions transitioned to `State.TERMINATED`.
+
+#### 12. [`SipRouteBindingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRouteBindingTest.java) (2 Tests)
+- **`testParameterBindingAnnotations`**: Validates compile-time parameter binding and runtime injection for `@SipCallId`, `@SipFrom`, `@SipTo`, `@SipBody`, `@SipHeader`, `@SipParam`, and active `SipSession`.
+- **`testRequiredParamMissingThrowsException`**: Asserts that requests missing a required `@SipParam(required = true)` fail fast with a descriptive binding exception.
+
+#### 13. [`SipServerHealthIndicatorTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipServerHealthIndicatorTest.java) (2 Tests)
+- **`testHealthIndicatorWhenServerIsStopped`**: Confirms health status reports `HealthStatus.DOWN` when the SIP server is stopped.
+- **`testHealthIndicatorWhenServerIsRunning`**: Confirms health status reports `HealthStatus.UP` with operational details (bound UDP port, bound TCP port, and active dialog count) when running.
+
+#### 14. [`SipTimerTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipTimerTest.java) (28 Tests)
+- **`testAuto100TryingEmittedWhenProcessingExceedsDelay`**: Enforces RFC 3261 §17.2.1: when controller processing exceeds the configured timer threshold (e.g. 80ms), a non-blocking reactive timer automatically emits `100 Trying` to quell UDP retransmissions before `200 OK`.
+- **`testAuto100TryingNotEmittedWhenFastResponse`**: Asserts that fast responses suppress the `100 Trying` timer and emit only the final response.
+- **`testAuto100TryingCancelledWhenProvisional180RingingEmittedEarly`**: Asserts that when a controller emits a provisional response (such as `180 Ringing`) before the timer fires, the auto `100 Trying` timer is immediately cancelled and never emitted.
+- **`testAuto100TryingCancelledWhenCancelArrivesBeforeTimerFires`**: Asserts that if a `CANCEL` arrives while an `INVITE` is pending, the timer is aborted; the transaction emits `200 OK` (to CANCEL) and `487 Request Terminated` (to INVITE), and `100 Trying` is never emitted.
+- **`testAuto100TryingCancelledWhenControllerFailsImmediately`**: Asserts that synchronous controller errors cancel the timer and emit the mapped error response without emitting `100 Trying`.
+- **`testAuto100TryingCancelledWhenReactiveControllerFailsAsync`**: Asserts that asynchronous reactive pipeline errors (`Mono.error()`) cancel the timer cleanly.
+- **`testAuto100TryingDisabledWhenConfiguredFalse`**: Verifies that when `sip.server.auto-100-trying-enabled=false`, slow requests never emit `100 Trying`.
+- **`testClientUdpRequestTimeoutThrowsTimeoutException`**: Verifies that `ReactiveSipClient.send(...)` times out non-blockingly and emits `TimeoutException` when sending to an unresponsive UDP endpoint.
+- **`testClientUdpRequestTimeoutUnregistersResponseRouterListeners`**: Enforces zero listener leaks: asserts that upon client timeout, all registered transaction listeners in `SipResponseRouter` are cleaned up.
+- **`testClientPerRequestCustomTimeoutOverride`**: Validates per-request timeout overrides via `ReactiveSipClient.send(req, dest, Duration.ofMillis(100))` overriding the server configuration default.
+- **`testClientSendWithProvisionalTimeoutThrowsTimeoutException`**: Asserts that `sendWithProvisional` enforces reactive timeout limits.
+- **`testTokenBucketReplenishmentOverTime`**: Validates high-resolution time replenishment: exhausts tokens, sleeps for elapsed refill duration, and asserts tokens replenish according to configured rate per second.
+- **`testTokenBucketCapsAtCapacityAfterLongIdle`**: Asserts that idle token replenishment never overflows beyond the configured burst capacity.
+- **`testSessionTouchResetsExpirationTimer`**: Asserts that invoking `session.touch()` resets the expiration window and extends dialog session lifetime past the original TTL deadline.
+- **`testEvictExpiredSessionsBatchTimer`**: Validates batch eviction of expired sessions while preserving active touched sessions.
+- **`testTimerBCancelledOn1xxProvisionalResponse`**: Validates Timer B cancellation: asserts that receiving a provisional response (`180 Ringing`) immediately cancels Timer B ($64 \times T_1$), allowing the call to ring past the initial timeout and succeed when `200 OK` arrives without cutoff.
+- **`testRingTimeoutExpiresWhenRingingNeverAnswers`**: Asserts that if provisional `180 Ringing` arrives but the call is never answered, the alerting `ringTimeoutMs` timer fires and terminates the stream with `TimeoutException`.
+- **`testTimerAClientInviteRetransmissionOnUdp`**: Enforces RFC 3261 §17.1.1.2: asserts that `ReactiveSipClient` exponentially retransmits `INVITE` requests over UDP ($T_1, 2T_1\dots$) until a provisional or final response is received, stopping retransmissions immediately.
+- **`testTimerEClientNonInviteRetransmissionOnUdp`**: Enforces RFC 3261 §17.1.2.2: asserts that `ReactiveSipClient` retransmits non-INVITE requests (`OPTIONS`, `REGISTER`) over UDP doubling up to $T_2$ until answered.
+- **`testTimerDClientAbsorbs3xxTo6xxRetransmissionsAndResendsAck`**: Enforces RFC 3261 §17.1.1.2: asserts that receiving a 3xx–6xx final error response (`486 Busy Here`) auto-sends `ACK`, completes the subscriber sink, and absorbs subsequent duplicate error responses while re-sending `ACK` during Timer D ($T_4$).
+- **`testTimerGUasRetransmits200OkUntilAck`**: Enforces RFC 3261 §13.3.1.4: asserts that the UAS dialog layer retransmits `200 OK` responses to `INVITE` over UDP at $T_1 \to 2T_1 \dots \le T_2$ until an incoming `ACK` is received, which cancels Timer G retransmissions.
+- **`testTimerHUasTeardownOnAckTimeout`**: Enforces RFC 3261 §13.3.1.4: asserts that if no `ACK` arrives before Timer H expires ($64 \times T_1 = 32\text{ s}$), the UAS dialog terminates the session (`TERMINATED`), emits outbound `BYE`, and records timeout failure metrics.
+- **`testTimerJServerNonInviteResponseCacheAndReplay`**: Enforces RFC 3261 §17.2.2: asserts that the server non-INVITE transaction cache keyed by `branch:method` replays the cached `200 OK` response for retransmitted requests without re-executing controller routes, automatically evicting entries upon Timer J expiry.
+- **`testLateAckAfterTimerHDoesNotResurrectSession`**: Verifies that when Timer H terminates an unacknowledged session and sends an outbound `BYE`, an incoming late `ACK` arrives into a dead dialog, is discarded cleanly, and does not resurrect or leak the terminated session.
+- **`testAckVsTimerGRaceCondition`**: High-concurrency stress test simultaneously firing Timer G retransmissions and incoming `ACK` packets across 40 parallel threads to verify thread-safe `AtomicBoolean` race resolution, zero memory leaks, and idempotent disposable cleanup.
+- **`testVirtualTimeTimerGAndHPrecision`**: Executes deterministic virtual-time stepping via `VirtualTimeScheduler` without wall-clock sleeps, verifying Timer G exponential backoff ($500\text{ ms} \to 1000\text{ ms} \to 2000\text{ ms}$) and exact Timer H $32\text{ s}$ termination with outbound `BYE`.
+- **`testSecondInviteDuringProceedingRejectedWith500AndRetryAfter`**: Enforces RFC 3261 §14.2: when a second `INVITE` arrives on the same dialog while the initial transaction is still in `Proceeding` state, the server rejects it with `500 Server Internal Error` containing a randomized `Retry-After: 1..10` header.
+- **`testDuplicateInviteRetransmitsProvisionalResponse`**: Enforces RFC 3261 §17.2.1: retransmitted `INVITE` requests arriving while the server transaction is in `Proceeding` state immediately re-send the cached provisional response (`180 Ringing`) without invoking controller logic twice.
+
+---
+
+### Detailed Breakdown: `:sip-app` Integration Suites (28 Tests)
+
+#### 1. [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) (19 Tests over UDP)
+- **`testServerIsRunning`**: Asserts that the Netty NIO datagram channel successfully binds to port 5060 and the application context starts cleanly.
+- **`testFullCallFlow`**: Executes complete RFC 3261 terminating dialog lifecycle over live UDP sockets:
+  1. Client sends `INVITE` with SDP offer.
+  2. Server responds with provisional `180 Ringing`.
+  3. Server completes pickup after 50 ms delay and responds with `200 OK` containing unicast SDP answer.
+  4. Client acknowledges with `ACK`.
+  5. Client terminates call with `BYE`.
+  6. Server acknowledges termination with `200 OK`.
+- **`testRegisterFlow`**: Validates SIP user registration (`REGISTER`), verifying Contact header echoing and custom headers (`X-Registered-User`, `Expires: 3600`).
+- **`testRegisterFlowWithExplicitUriParam`**: Tests request-URI parameter parsing over the network (`sip:registrar@127.0.0.1:5060;transport=udp`).
+- **`testOptionsFlow`**: Validates RFC 3261 §11 capability discovery (`OPTIONS`), asserting that the server returns `200 OK` with `Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE`.
+- **`testMessageFlow`**: Validates RFC 3428 instant messaging (`MESSAGE`), asserting `200 OK` delivery for text payloads.
+- **`testUnsupportedMethodReturnsMethodNotAllowed`**: Enforces RFC 3261 §8.2.1: sending an unmapped method (`FOOBAR`) yields `405 Method Not Allowed` with an `Allow` header listing registered routes.
+- **`testMalformedRequestMissingMandatoryHeadersReturnsBadRequest`**: Enforces RFC 3261 §8.1.1: sending an `INVITE` missing `Call-ID` or `CSeq` yields `400 Bad Request`.
+- **`testUnsupportedRequireReturnsBadExtension`**: Enforces RFC 3261 §8.2.2: sending a request with `Require: 100rel, unknown-ext-123` yields `420 Bad Extension` with `Unsupported: unknown-ext-123`.
+- **`testCancelPendingInviteFlow`**: Validates end-to-end call setup cancellation over UDP: sending `CANCEL` while `INVITE` is pending yields `200 OK` to the CANCEL followed by `487 Request Terminated` to the INVITE.
+- **`testCancelUnknownTransactionReturns481`**: Verifies that canceling an unknown or non-existent transaction over the network yields `481 Call/Transaction Does Not Exist`.
+- **`testCustomFilterAppliedOverNetwork`**: Verifies that registered reactive `SipServerFilter` beans intercept live UDP packets, mutate headers (`X-Filtered-By`), and inject telemetry over the network.
+- **`testNetworkAuto100TryingOverUdp`**: End-to-end network verification of RFC 3261 §17.2.1 auto 100 Trying timer: sends an `INVITE` to a delayed controller route (`sip:slow@127.0.0.1:5060`), verifying that the server emits `100 Trying` over live UDP datagrams after 200ms before returning `200 OK`.
+- **`testNetworkClientTimeoutOverUdp`**: End-to-end network verification of client request timeout: asserts that sending a request to an unresponsive UDP port fires the client timeout timer and produces `TimeoutException` within the configured interval.
+- **`testFirstInviteDroppedRetransmittedSucceeds`**: Simulates initial UDP datagram drop: client retransmits `INVITE` via Timer A, and server processes the retransmitted request and establishes session without degradation.
+- **`testDropped200OkUasTimerGRetransmits`**: Simulates dropped `200 OK` or missing initial `ACK`: server Timer G table holds the unacknowledged transaction and retransmits `200 OK` until valid incoming `ACK` cancels the timer.
+- **`testDroppedAckServerRetransmits200OkUntilAck`**: Simulates dropped `ACK` via packet filter: UAS Timer G continues retransmitting `200 OK` until the client's retransmitted second `ACK` arrives and cancels Timer G and H.
+- **`testDuplicateByeServerReplays200Ok`**: Enforces RFC 3261 §17.2.2: simulates duplicate/retransmitted `BYE` datagrams over the network; server replays cached `200 OK` from Timer J cache without invoking controller logic twice.
+- **`testRegisterRetransmittedMidProcessing`**: Tests in-flight idempotence: retransmitted `REGISTER` datagram arriving while registration transaction is being processed succeeds cleanly without race conditions.
+
+#### 2. [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) (6 Tests over TCP)
+- **`testTcpServerIsRunning`**: Verifies that Netty TCP server socket channel binds and accepts incoming TCP connections on port 5060.
+- **`testFullCallFlowOverTcp`**: Executes the complete call signaling flow (`INVITE` -> `180 Ringing` -> `200 OK` -> `ACK` -> `BYE` -> `200 OK`) over a persistent, multiplexed TCP stream socket.
+- **`testMessageOverTcp`**: Verifies instant messaging (`MESSAGE`) framing and transaction delivery over TCP.
+- **`testRegisterOverTcp`**: Verifies registration transaction processing over TCP.
+- **`testOptionsOverTcp`**: Verifies `OPTIONS` capability exchange over TCP.
+- **`testTcpKeepAliveAndFraming`**: Tests RFC 5626 §4.4 keep-alive behavior: injects leading CRLF and double CRLF ping sequences before valid SIP frames; confirms `SipStreamFrameDecoder` discards keep-alive bytes without corrupting subsequent SIP message boundaries.
+
+#### 3. [`SipAppTest`](../sip-app/src/test/java/net/pilgrim/SipAppTest.java) (3 Tests)
+- **`testItWorks`**: Validates Micronaut dependency injection context initialization and verifies that `SipUdpServer` and `SipTcpServer` singleton beans are wired correctly.
+- **`testExecutableMethodProcessorRegisteredRoutes`**: Asserts that `SipControllerProcessor` discovered and compiled all `@SipController` method routes into `SipRouteRegistry` at compile time without reflection.
+- **`testDuplicateRouteDetectionThrowsException`**: Asserts that registering duplicate controller routes for the same SIP method throws a configuration exception during bootstrap to prevent ambiguous dispatching.
+
+---
+
+### Executing Automated Tests
+
+Execute all 130 tests across both modules:
+```bash
+./gradlew check test
+```
+
+Execute only the library unit test suite (`:micronaut-sip`):
+```bash
+./gradlew :micronaut-sip:test
+```
+
+Execute only the network integration test suite (`:sip-app`):
+```bash
+./gradlew :sip-app:test
+```
+
+Execute a specific test class:
+```bash
+./gradlew :micronaut-sip:test --tests net.pilgrim.sip.SipRateLimitTest
+./gradlew :sip-app:test --tests net.pilgrim.sip.SipIntegrationTest
+```
+
+View HTML test execution reports:
+```bash
+open micronaut-sip/build/reports/tests/test/index.html
+open sip-app/build/reports/tests/test/index.html
+```
+
+---
+
+## Conformance Testing (`sip-tt`)
+
+The SIP application and stack are verified against **RFC 3261** and **RFC 3264** using [**OpenIPC/sip-tt**](https://github.com/OpenIPC/sip-tt), an open-source headless SIP conformance test tool scored against **ETSI TS 102 027-2**.
+
+### Test Execution
+
+To execute the terminating endpoint conformance suite against a running `sip-app` instance:
+
+```bash
+# 1. Start sip-app (listening on port 5060)
+./gradlew :sip-app:run
+
+# 2. Run sip-tt conformance tests (all mandatory and recommended purposes)
+sip-tt run \
+  --target 127.0.0.1:5060 \
+  --local-ip 127.0.0.1 \
+  --roles terminating \
+  --id-glob 'SIP_CC_TE_*' \
+  --id-glob 'LOCAL-SDP-ANSWER*' \
+  --id-glob 'LOCAL-SDP-HOLD*' \
+  --json-report results.json
+```
+
+### Conformance Test Results (100% Passed)
+
+| Test Purpose | Specification | Status | Description |
+| :--- | :--- | :--- | :--- |
+| `SIP_CC_TE_CE_V_001` | RFC 3261 §8, §8.2, §13.3.1.1 | **PASSED** | Answers well-formed INVITE with provisional (1xx) and success (2xx) |
+| `SIP_CC_TE_CE_V_006` | RFC 3261 §13.2.1, §13.3.1 | **PASSED** | Bodyless INVITE answered with offer in 2xx and accepts answer in ACK |
+| `SIP_CC_TE_SM_I_001` | RFC 3261 §14.2 | **PASSED** | Second INVITE during `Proceeding` state refused with `500 Server Internal Error` and `Retry-After: 1..10` |
+| `SIP_CC_TE_SM_V_001` | RFC 3261 §14 | **PASSED** | re-INVITE inside dialog is answered with its own CSeq (no cached replay) |
+| `SIP_CC_TE_SM_V_002` | RFC 3261 §14 | **PASSED** | Bodyless re-INVITE accepted with 200 OK containing session offer |
+| `SIP_CC_TE_SM_V_003` | RFC 3261 §13.3.1.4 | **PASSED** | UAS Timer H unacked 2xx retransmission ladder (32s) followed by outbound BYE dialog teardown |
+| `LOCAL-SDP-ANSWER-KEEPS-OFFERED-PAYLOAD-NUMBERS` | RFC 3264 §6.1 | **PASSED** | SDP answer preserves offered payload type number bindings |
+| `LOCAL-SDP-HOLD-IS-HONOURED` | RFC 3264 §6.1, §8.4 | **PASSED** | Offer of `a=sendonly` (call hold) answered with `a=recvonly` |
+
+---
