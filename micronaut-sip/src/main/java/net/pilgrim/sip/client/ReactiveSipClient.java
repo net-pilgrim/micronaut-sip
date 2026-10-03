@@ -448,23 +448,51 @@ public class ReactiveSipClient {
      * Sends an ACK for a 200 OK response (RFC 3261 Section 13.2.2.4).
      */
     public Mono<Void> sendAck(SipRequest originalInvite, SipResponse okResponse, InetSocketAddress destination) {
-        return sendAck(originalInvite, okResponse, destination, resolveTransport(originalInvite));
+        return sendAck(originalInvite, okResponse, destination, null, null, resolveTransport(originalInvite));
+    }
+
+    /**
+     * Sends an ACK with optional body (e.g. SDP answer for late-offer INVITE flows).
+     */
+    public Mono<Void> sendAck(SipRequest originalInvite,
+                              SipResponse okResponse,
+                              InetSocketAddress destination,
+                              String body,
+                              String contentType) {
+        return sendAck(originalInvite, okResponse, destination, body, contentType, resolveTransport(originalInvite));
     }
 
     public Mono<Void> sendAck(SipRequest originalInvite, SipResponse okResponse, InetSocketAddress destination, SipTransport transport) {
+        return sendAck(originalInvite, okResponse, destination, null, null, transport);
+    }
+
+    public Mono<Void> sendAck(SipRequest originalInvite,
+                              SipResponse okResponse,
+                              InetSocketAddress destination,
+                              String body,
+                              String contentType,
+                              SipTransport transport) {
         if (transport == SipTransport.TCP) {
-            return sendAckTcp(originalInvite, okResponse, destination);
+            return sendAckTcp(originalInvite, okResponse, destination, body, contentType);
         }
 
         return Mono.fromRunnable(() -> {
-            SipRequest ack = buildAck(originalInvite, okResponse, SipTransport.UDP);
+            SipRequest ack = buildAck(originalInvite, okResponse, SipTransport.UDP, body, contentType);
             server.sendUdp(ack, destination);
         });
     }
 
     public Mono<Void> sendAckTcp(SipRequest originalInvite, SipResponse okResponse, InetSocketAddress destination) {
+        return sendAckTcp(originalInvite, okResponse, destination, null, null);
+    }
+
+    public Mono<Void> sendAckTcp(SipRequest originalInvite,
+                                 SipResponse okResponse,
+                                 InetSocketAddress destination,
+                                 String body,
+                                 String contentType) {
         return Mono.create(sink -> {
-            SipRequest ack = buildAck(originalInvite, okResponse, SipTransport.TCP);
+            SipRequest ack = buildAck(originalInvite, okResponse, SipTransport.TCP, body, contentType);
             Bootstrap bootstrap = new Bootstrap();
             bootstrap.group(clientTcpGroup)
                     .channel(NioSocketChannel.class)
@@ -538,6 +566,14 @@ public class ReactiveSipClient {
     }
 
     private SipRequest buildAck(SipRequest originalInvite, SipResponse okResponse, SipTransport transport) {
+        return buildAck(originalInvite, okResponse, transport, null, null);
+    }
+
+    private SipRequest buildAck(SipRequest originalInvite,
+                                SipResponse okResponse,
+                                SipTransport transport,
+                                String body,
+                                String contentType) {
         SipRequest ack = new SipRequest(SipMethod.ACK, originalInvite.getUri());
         ack.setTransport(transport);
         SipHeaders ackHeaders = ack.getHeaders();
@@ -559,7 +595,15 @@ public class ReactiveSipClient {
         int localPort = (transport == SipTransport.TCP) ? server.getTcpPort() : server.getUdpPort();
         String newBranch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         ackHeaders.addVia(transport.getViaProtocol() + " 127.0.0.1:" + localPort + ";branch=" + newBranch);
-        ackHeaders.setContentLength(0);
+
+        if (body != null && !body.isEmpty()) {
+            ack.setBody(body);
+            if (contentType != null && !contentType.isEmpty()) {
+                ackHeaders.setContentType(contentType);
+            }
+        } else {
+            ackHeaders.setContentLength(0);
+        }
 
         return ack;
     }

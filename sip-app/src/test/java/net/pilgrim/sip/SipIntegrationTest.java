@@ -143,6 +143,56 @@ class SipIntegrationTest {
     }
 
     @Test
+    void testLateOfferAnswerFlowOverUdp() {
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
+        String callId = "test-late-offer-" + UUID.randomUUID();
+
+        SipRequest inviteWithoutOffer = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
+                .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                .to("<sip:bob@127.0.0.1>")
+                .callId(callId)
+                .build();
+
+        List<SipResponse> responses = client.sendWithProvisional(inviteWithoutOffer, serverAddress)
+                .collectList()
+                .block(Duration.ofSeconds(5));
+        assertNotNull(responses);
+        assertEquals(2, responses.size());
+
+        SipResponse ok = responses.get(1);
+        assertEquals(200, ok.getStatusCode());
+        assertEquals("application/sdp", ok.getContentType());
+        String sdpOfferFromServer = ok.getBodyAsString();
+        assertTrue(sdpOfferFromServer.contains("m=audio"), "Server should include SDP offer in 200 OK");
+
+        String ackSdpAnswer =
+                "v=0\r\n" +
+                "o=Alice 1001 1001 IN IP4 127.0.0.1\r\n" +
+                "s=Answer\r\n" +
+                "c=IN IP4 127.0.0.1\r\n" +
+                "t=0 0\r\n" +
+                "m=audio 30002 RTP/AVP 0\r\n" +
+                "a=rtpmap:0 PCMU/8000\r\n" +
+                "a=recvonly\r\n";
+        client.sendAck(inviteWithoutOffer, ok, serverAddress, ackSdpAnswer, "application/sdp")
+                .block(Duration.ofSeconds(2));
+
+        Optional<SipSession> sessionOpt = sessionManager.findSession(callId);
+        assertTrue(sessionOpt.isPresent());
+        SipSession session = sessionOpt.get();
+
+        long deadline = System.currentTimeMillis() + 2000;
+        while (session.getState() != SipSession.State.CONFIRMED && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException ignored) {}
+        }
+        assertEquals(SipSession.State.CONFIRMED, session.getState());
+        assertEquals(ackSdpAnswer, session.getAttribute("sdpAnswer"));
+        assertEquals(Boolean.FALSE, session.getAttribute("awaitingAckSdpAnswer"));
+    }
+
+    @Test
     void testRegisterFlow() {
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
         SipRequest register = SipRequest.builder(SipMethod.REGISTER, "sip:127.0.0.1:" + server.getPort())

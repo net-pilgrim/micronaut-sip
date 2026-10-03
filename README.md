@@ -68,7 +68,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
      - `send(request, destination)`: final response (`Mono<SipResponse>`), with transport auto-resolved from SIP metadata (`Request-URI transport` / `Via` / request transport).
      - `sendWithProvisional(request, destination)`: provisional + final responses (`Flux<SipResponse>`), with the same transport auto-resolution.
      - `send(request, destination, SipTransport)`: explicit override when transport must be forced.
-   - `sendAck(...)`: Sends an RFC 3261-compliant ACK over UDP or TCP.
+   - `sendAck(...)`: Sends an RFC 3261-compliant ACK over UDP or TCP, with optional SDP payload support for late-offer/answer call flows.
    - `sendBye(...)`: Terminates active calls over UDP or TCP.
 
 6. **Dialog & Session Management (`SipSessionManager`)**:
@@ -115,6 +115,10 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Strict RFC 3261 §17.2.1 compliance: rate-limited `ACK` messages are dropped silently without generating error responses.
     - CIDR subnet and exact IP whitelisting (e.g. `10.0.0.0/8`, `192.168.0.0/16`, `127.0.0.1`, `::1`).
     - Bounded tracking cache with automatic idle entry eviction to prevent memory exhaustion from spoofed DoS sweeps.
+
+14. **Basic SDP Handling Module (`micronaut-sdp`)**:
+    - Lightweight SDP parser/model (`SdpParser`, `SdpMessage`) for session-level fields, media lines, and attributes.
+    - Offer/answer helper (`SdpNegotiator`) supporting default audio offer generation and direction-aware SDP answer generation.
 
 ---
 

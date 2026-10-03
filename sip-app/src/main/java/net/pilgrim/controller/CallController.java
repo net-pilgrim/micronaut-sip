@@ -5,6 +5,7 @@ import net.pilgrim.sip.model.SipHeaders;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
 import net.pilgrim.sip.model.SipUri;
+import net.pilgrim.sip.sdp.SdpNegotiator;
 import net.pilgrim.sip.session.SipSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,29 +23,7 @@ import java.time.Duration;
 public class CallController {
 
     private static final Logger LOG = LoggerFactory.getLogger(CallController.class);
-
-    private static final String BASE_SDP_ANSWER =
-            "v=0\r\n" +
-            "o=MicronautSIP 2890844526 2890844526 IN IP4 127.0.0.1\r\n" +
-            "s=Call\r\n" +
-            "c=IN IP4 127.0.0.1\r\n" +
-            "t=0 0\r\n" +
-            "m=audio 49170 RTP/AVP 0\r\n" +
-            "a=rtpmap:0 PCMU/8000\r\n";
-
-    private String createSdpAnswer(String offer) {
-        String direction = "a=sendrecv\r\n";
-        if (offer != null) {
-            if (offer.contains("a=sendonly")) {
-                direction = "a=recvonly\r\n";
-            } else if (offer.contains("a=recvonly")) {
-                direction = "a=sendonly\r\n";
-            } else if (offer.contains("a=inactive")) {
-                direction = "a=inactive\r\n";
-            }
-        }
-        return BASE_SDP_ANSWER + direction;
-    }
+    private static final SdpNegotiator SDP_NEGOTIATOR = new SdpNegotiator();
 
     /**
      * Handles INVITE requests reactively.
@@ -62,12 +41,23 @@ public class CallController {
 
         session.setState(SipSession.State.EARLY);
         session.setAttribute("sdpOffer", sdpOffer);
+        session.setAttribute("awaitingAckSdpAnswer", false);
 
         // 180 Ringing provisional response
         SipResponse ringing = SipResponse.ringing(request);
 
-        // 200 OK response with SDP answer body
-        SipResponse ok = SipResponse.ok(request, createSdpAnswer(sdpOffer), "application/sdp");
+        // 200 OK carries SDP answer for early-offer INVITE and SDP offer for late-offer INVITE.
+        SipResponse ok;
+        if (sdpOffer != null && !sdpOffer.isBlank()) {
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer);
+            session.setAttribute("sdpAnswer", answer);
+            ok = SipResponse.ok(request, answer, "application/sdp");
+        } else {
+            session.setAttribute("awaitingAckSdpAnswer", true);
+            String localOffer = SDP_NEGOTIATOR.createOffer();
+            session.setAttribute("localSdpOffer", localOffer);
+            ok = SipResponse.ok(request, localOffer, "application/sdp");
+        }
         ok.getHeaders().setContact("<sip:127.0.0.1:" + request.getRemoteAddress().getPort() + ">");
 
         long delayMs = 300;
@@ -97,7 +87,19 @@ public class CallController {
                                           SipSession session) {
         LOG.info("Received slow INVITE for Call-ID: {}, delaying 350ms to trigger auto 100 Trying", callId);
         session.setState(SipSession.State.EARLY);
-        SipResponse ok = SipResponse.ok(request, createSdpAnswer(sdpOffer), "application/sdp");
+        session.setAttribute("sdpOffer", sdpOffer);
+        session.setAttribute("awaitingAckSdpAnswer", false);
+        SipResponse ok;
+        if (sdpOffer != null && !sdpOffer.isBlank()) {
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer);
+            session.setAttribute("sdpAnswer", answer);
+            ok = SipResponse.ok(request, answer, "application/sdp");
+        } else {
+            session.setAttribute("awaitingAckSdpAnswer", true);
+            String localOffer = SDP_NEGOTIATOR.createOffer();
+            session.setAttribute("localSdpOffer", localOffer);
+            ok = SipResponse.ok(request, localOffer, "application/sdp");
+        }
         ok.getHeaders().setContact("<sip:127.0.0.1:" + request.getRemoteAddress().getPort() + ">");
         return Mono.just(ok).delayElement(Duration.ofMillis(350));
     }
@@ -109,10 +111,25 @@ public class CallController {
     @OnAck
     public void onAck(SipRequest request,
                       @SipCallId String callId,
+                      @SipBody String ackSdpAnswer,
                       SipSession session) {
         if (session != null && session.getState() == SipSession.State.TERMINATED) {
             LOG.info("Received ACK for terminated Call-ID: {}, ignoring state change.", callId);
             return;
+        }
+        if (session != null) {
+            Boolean awaitingAckSdpAnswer = session.getAttribute("awaitingAckSdpAnswer");
+            if (Boolean.TRUE.equals(awaitingAckSdpAnswer)) {
+                String contentType = request.getContentType();
+                if (contentType != null && contentType.equalsIgnoreCase("application/sdp")
+                        && ackSdpAnswer != null && !ackSdpAnswer.isBlank()) {
+                    session.setAttribute("sdpAnswer", ackSdpAnswer);
+                    session.setAttribute("awaitingAckSdpAnswer", false);
+                    LOG.info("Received SDP answer in ACK for Call-ID: {} ({} bytes).", callId, ackSdpAnswer.length());
+                } else {
+                    LOG.warn("Expected SDP answer in ACK for Call-ID: {}, but none was provided.", callId);
+                }
+            }
         }
         LOG.info("Received ACK for Call-ID: {}, call session is now CONFIRMED.", callId);
         if (session != null) {

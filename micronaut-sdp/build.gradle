@@ -1,0 +1,25 @@
+plugins {
+    id("java-library")
+}
+
+version = "0.1." + (findProperty("buildNumber") ?: "3")
+group = "net.pilgrim"
+
+dependencies {
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter-api")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+java {
+    sourceCompatibility = JavaVersion.toVersion("25")
+    targetCompatibility = JavaVersion.toVersion("25")
+    withSourcesJar()
+    withJavadocJar()
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    failOnNoDiscoveredTests = false
+}
