@@ -1,5 +1,6 @@
 rootProject.name = "sip-parent"
 
 include("micronaut-sdp")
+include("micronaut-rtp")
 include("micronaut-sip")
 include("sip-app")

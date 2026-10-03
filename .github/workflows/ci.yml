@@ -67,4 +67,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: ./gradlew -PbuildNumber=${{ github.run_number }} :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository
+        run: ./gradlew -PbuildNumber=${{ github.run_number }} :micronaut-sdp:publishAllPublicationsToGitHubPackagesRepository :micronaut-rtp:publishAllPublicationsToGitHubPackagesRepository :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository

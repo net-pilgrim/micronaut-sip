@@ -1,18 +1,28 @@
 package net.pilgrim.controller;
 
+import net.pilgrim.sip.rtp.RtpPacketizer;
+import net.pilgrim.sip.rtp.RtpStreamSender;
+import net.pilgrim.sip.rtp.codec.RtpCodec;
+import net.pilgrim.sip.rtp.codec.RtpCodecRegistry;
 import net.pilgrim.sip.annotation.*;
 import net.pilgrim.sip.model.SipHeaders;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
 import net.pilgrim.sip.model.SipUri;
+import net.pilgrim.sip.sdp.SdpMessage;
 import net.pilgrim.sip.sdp.SdpNegotiator;
+import net.pilgrim.sip.sdp.SdpParser;
 import net.pilgrim.sip.session.SipSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.io.IOException;
 import java.time.Duration;
+import java.util.Optional;
 
 /**
  * Example reactive SIP Controller handling phone call setup (INVITE),
@@ -24,6 +34,8 @@ public class CallController {
 
     private static final Logger LOG = LoggerFactory.getLogger(CallController.class);
     private static final SdpNegotiator SDP_NEGOTIATOR = new SdpNegotiator();
+    private static final SdpParser SDP_PARSER = new SdpParser();
+    private static final RtpCodecRegistry RTP_CODECS = RtpCodecRegistry.withG711Defaults();
 
     /**
      * Handles INVITE requests reactively.
@@ -135,6 +147,7 @@ public class CallController {
         if (session != null) {
             session.setState(SipSession.State.CONFIRMED);
         }
+        maybeSendRtpProbe(callId, session);
     }
 
     /**
@@ -206,5 +219,83 @@ public class CallController {
                                        @SipBody String messageBody) {
         LOG.info("Received MESSAGE from {}: '{}'", from, messageBody);
         return Mono.just(SipResponse.ok(request));
+    }
+
+    private void maybeSendRtpProbe(String callId, SipSession session) {
+        if (session == null) {
+            return;
+        }
+        String remoteSdp = session.getAttribute("sdpOffer");
+        if (remoteSdp == null || remoteSdp.isBlank()) {
+            remoteSdp = session.getAttribute("sdpAnswer");
+        }
+        if (remoteSdp == null || remoteSdp.isBlank()) {
+            return;
+        }
+
+        SdpMessage parsed;
+        try {
+            parsed = SDP_PARSER.parse(remoteSdp);
+        } catch (IllegalArgumentException e) {
+            LOG.warn("Cannot parse remote SDP for RTP probe, Call-ID: {}", callId, e);
+            return;
+        }
+
+        SdpMessage.MediaDescription audio = parsed.findFirstAudioMedia();
+        if (audio == null || audio.getPort() <= 0) {
+            return;
+        }
+
+        Optional<RtpCodec> codec = audio.getFormats().stream()
+                .map(this::parsePayloadType)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .map(RTP_CODECS::findByPayloadType)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .findFirst();
+        if (codec.isEmpty()) {
+            return;
+        }
+
+        String host = parseConnectionHost(parsed.getConnection()).orElse("127.0.0.1");
+        byte[] silencePcm16Le = new byte[160 * 2];
+        RtpCodec selectedCodec = codec.get();
+        RtpPacketizer packetizer = new RtpPacketizer(selectedCodec.payloadType(), selectedCodec.clockRate());
+        try (RtpStreamSender sender = new RtpStreamSender(
+                InetAddress.getByName(host),
+                audio.getPort(),
+                packetizer
+        )) {
+            sender.sendPcm16LeFrame(silencePcm16Le, selectedCodec, true);
+            LOG.info("Sent RTP probe frame (codec={} pt={} {}:{}) for Call-ID: {}",
+                    selectedCodec.name(), selectedCodec.payloadType(), host, audio.getPort(), callId);
+        } catch (UnknownHostException e) {
+            LOG.warn("Failed to resolve RTP host '{}' for Call-ID: {}", host, callId, e);
+        } catch (IllegalArgumentException | IOException e) {
+            LOG.warn("Failed to send RTP probe frame for Call-ID: {}", callId, e);
+        }
+    }
+
+    private Optional<Integer> parsePayloadType(String payloadType) {
+        if (payloadType == null || payloadType.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Integer.parseInt(payloadType.trim()));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<String> parseConnectionHost(String connectionLine) {
+        if (connectionLine == null || connectionLine.isBlank()) {
+            return Optional.empty();
+        }
+        String[] parts = connectionLine.trim().split("\\s+");
+        if (parts.length < 3 || parts[2].isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(parts[2].trim());
     }
 }

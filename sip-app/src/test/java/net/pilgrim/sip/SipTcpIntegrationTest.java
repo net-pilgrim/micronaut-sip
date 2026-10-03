@@ -14,6 +14,9 @@ import reactor.core.publisher.Flux;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -102,6 +105,48 @@ class SipTcpIntegrationTest {
         assertNotNull(byeResponse);
         assertEquals(200, byeResponse.getStatusCode());
         assertEquals(SipSession.State.TERMINATED, sessionOpt.get().getState());
+    }
+
+    @Test
+    void testAckTriggersRtpProbeWhenSignalingIsTcp() throws Exception {
+        InetSocketAddress tcpAddress = new InetSocketAddress("127.0.0.1", server.getTcpPort());
+        String callId = "rtp-probe-tcp-" + UUID.randomUUID();
+
+        try (DatagramSocket rtpReceiver = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
+            rtpReceiver.setSoTimeout(3000);
+            String sdpOffer =
+                    "v=0\r\n" +
+                            "o=Alice 2010 2010 IN IP4 127.0.0.1\r\n" +
+                            "s=Offer\r\n" +
+                            "c=IN IP4 127.0.0.1\r\n" +
+                            "t=0 0\r\n" +
+                            "m=audio " + rtpReceiver.getLocalPort() + " RTP/AVP 0\r\n";
+
+            SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getTcpPort() + ";transport=tcp")
+                    .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                    .to("<sip:bob@127.0.0.1>")
+                    .callId(callId)
+                    .contentType("application/sdp")
+                    .body(sdpOffer)
+                    .build();
+
+            List<SipResponse> responses = client.sendWithProvisional(invite, tcpAddress)
+                    .collectList()
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(responses);
+            SipResponse ok = responses.get(1);
+            client.sendAck(invite, ok, tcpAddress).block(Duration.ofSeconds(2));
+
+            byte[] buf = new byte[1500];
+            DatagramPacket packet = new DatagramPacket(buf, buf.length);
+            rtpReceiver.receive(packet);
+
+            byte[] raw = new byte[packet.getLength()];
+            System.arraycopy(packet.getData(), packet.getOffset(), raw, 0, packet.getLength());
+            net.pilgrim.sip.rtp.RtpPacket rtpPacket = net.pilgrim.sip.rtp.RtpPacket.parse(raw);
+            assertEquals(0, rtpPacket.getPayloadType());
+            assertEquals(160, rtpPacket.getPayload().length);
+        }
     }
 
     @Test

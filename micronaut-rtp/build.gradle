@@ -34,12 +34,12 @@ publishing {
         mavenJava(MavenPublication) {
             from components.java
             groupId = "net.pilgrim"
-            artifactId = "micronaut-sdp"
+            artifactId = "micronaut-rtp"
             version = project.version
 
             pom {
-                name = "Micronaut SDP"
-                description = "Lightweight SDP parser and offer/answer helper for Micronaut SIP"
+                name = "Micronaut RTP"
+                description = "Barebone RTP packetization/transport primitives with pluggable codecs"
                 url = "https://github.com/example/micronaut-sip"
                 licenses {
                     license {

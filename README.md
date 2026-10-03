@@ -120,6 +120,11 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Lightweight SDP parser/model (`SdpParser`, `SdpMessage`) for session-level fields, media lines, and attributes.
     - Offer/answer helper (`SdpNegotiator`) supporting default audio offer generation and direction-aware SDP answer generation.
 
+15. **Barebone RTP Streaming Module (`micronaut-rtp`)**:
+    - RTP packet model/parser (`RtpPacket`) and stream packetizer (`RtpPacketizer`) for sequence/timestamp progression.
+    - UDP send/receive primitives (`RtpStreamSender`, `RtpStreamReceiver`) for simple audio transport flows.
+    - Pluggable codec SPI (`RtpCodec`, `RtpCodecRegistry`) with initial G.711 support (`PCMU`/payload type `0`, `PCMA`/payload type `8`) and room for additional codecs.
+
 ---
 
 ## RFC Compliance
@@ -205,12 +210,12 @@ sip.server.max-sessions=10000
 
 ### Publish Library to Maven Local
 ```bash
-./gradlew :micronaut-sip:publishToMavenLocal
+./gradlew :micronaut-sdp:publishToMavenLocal :micronaut-rtp:publishToMavenLocal :micronaut-sip:publishToMavenLocal
 ```
 
 ### Publish Library to GitHub Packages
 ```bash
-./gradlew :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository
+./gradlew :micronaut-sdp:publishAllPublicationsToGitHubPackagesRepository :micronaut-rtp:publishAllPublicationsToGitHubPackagesRepository :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository
 ```
 
 ---
@@ -220,7 +225,7 @@ sip.server.max-sessions=10000
 The workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) automates:
 - **Build & Test**: Checks out code, configures Zulu JDK 25 with Gradle cache, and runs `./gradlew check test --info`.
 - **Artifact Archiving**: Saves test XML and HTML reports as build artifacts.
-- **Publishing**: On pushes to `main`/`master` or new releases, publishes `net.pilgrim:micronaut-sip` to GitHub Packages via `./gradlew :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository`.
+- **Publishing**: On pushes to `main`/`master` or new releases, publishes `net.pilgrim:micronaut-sdp`, `net.pilgrim:micronaut-rtp`, and `net.pilgrim:micronaut-sip` to GitHub Packages.
 
 ---
 

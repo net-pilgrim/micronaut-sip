@@ -15,6 +15,7 @@ dependencies {
     annotationProcessor("io.micronaut.serde:micronaut-serde-processor")
 
     implementation(project(":micronaut-sdp"))
+    implementation(project(":micronaut-rtp"))
     implementation(project(":micronaut-sip"))
     implementation("io.projectreactor:reactor-core")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
@@ -23,6 +24,7 @@ dependencies {
     runtimeOnly("ch.qos.logback:logback-classic")
 
     testImplementation(project(":micronaut-sdp"))
+    testImplementation(project(":micronaut-rtp"))
     testImplementation(project(":micronaut-sip"))
     testImplementation("io.projectreactor:reactor-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
