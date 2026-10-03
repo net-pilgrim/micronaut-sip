@@ -1,6 +1,6 @@
 # Examples
 
-## Example Controller
+## Example SIP Controller (`CallController`)
 
 In [`sip-app/src/main/java/net/pilgrim/controller/CallController.java`](../sip-app/src/main/java/net/pilgrim/controller/CallController.java):
 
@@ -8,7 +8,15 @@ In [`sip-app/src/main/java/net/pilgrim/controller/CallController.java`](../sip-a
 @SipController
 public class CallController {
 
-    // Emits 180 Ringing immediately, then 200 OK with SDP after 50ms
+    private static final SdpNegotiator SDP_NEGOTIATOR = new SdpNegotiator();
+    private final RtpMediaManager rtpMediaManager;
+
+    @Inject
+    public CallController(RtpMediaManager rtpMediaManager) {
+        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+    }
+
+    // Handles INVITE: allocates dynamic Netty RTP port and negotiates SDP offer/answer
     @OnInvite
     public Flux<SipResponse> onInvite(SipRequest request,
                                       @SipCallId String callId,
@@ -16,8 +24,25 @@ public class CallController {
                                       SipSession session) {
         session.setState(SipSession.State.EARLY);
 
+        // Allocate dynamic even UDP RTP media port pair
+        int localAudioPort = 49170;
+        try {
+            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
+            localAudioPort = mediaSession.getLocalPort();
+        } catch (Exception ignored) {}
+
         SipResponse ringing = SipResponse.ringing(request);
-        SipResponse ok = SipResponse.ok(request, "v=0\r\no=MicronautSIP...", "application/sdp");
+        SipResponse ok;
+
+        if (sdpOffer != null && !sdpOffer.isBlank()) {
+            // Early offer: client offered SDP in INVITE, server returns answer in 200 OK
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort);
+            ok = SipResponse.ok(request, answer, "application/sdp");
+        } else {
+            // Late offer: server offers SDP in 200 OK, client answers in ACK
+            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort);
+            ok = SipResponse.ok(request, localOffer, "application/sdp");
+        }
 
         return Flux.concat(
             Mono.just(ringing),
@@ -25,29 +50,34 @@ public class CallController {
         );
     }
 
-    // Handles ACK confirmation (void return type: no response sent per RFC 3261 §17.2.1)
+    // Handles ACK: marks dialog CONFIRMED and latches remote RTP destination
     @OnAck
     public void onAck(SipRequest request,
                       @SipCallId String callId,
+                      @SipBody String ackSdpAnswer,
                       SipSession session) {
-        session.setState(SipSession.State.CONFIRMED);
+        if (session != null && session.getState() != SipSession.State.TERMINATED) {
+            session.setState(SipSession.State.CONFIRMED);
+        }
     }
 
-    // Handles BYE to terminate the call
+    // Handles BYE: terminates active session and releases Netty RTP port pair
     @OnBye
     public Mono<SipResponse> onBye(SipRequest request,
                                    @SipCallId String callId,
                                    SipSession session) {
         session.setState(SipSession.State.TERMINATED);
+        rtpMediaManager.terminateSession(callId);
         return Mono.just(SipResponse.ok(request));
     }
 
-    // Handles CANCEL to abort in-flight call setup (RFC 3261 §9)
+    // Handles CANCEL: aborts in-flight call setup and tears down media session
     @OnCancel
     public void onCancel(SipRequest request,
                          @SipCallId String callId,
                          SipSession session) {
         if (session != null) session.setState(SipSession.State.TERMINATED);
+        rtpMediaManager.terminateSession(callId);
     }
 
     // Handles REGISTER with URI injection and request-URI parameter binding
@@ -79,11 +109,69 @@ public class CallController {
                                        @SipBody String messageBody) {
         return Mono.just(SipResponse.ok(request));
     }
+}
+```
 
-    // Declarative error handling mapping custom exceptions to SIP status codes
-    @SipError(UserNotFoundException.class)
-    public SipResponse handleNotFound(UserNotFoundException ex, SipRequest req) {
-        return req.createResponse(404, "User Not Found: " + ex.getMessage());
+---
+
+## Example SDP Offer/Answer Negotiation (`micronaut-sdp`)
+
+Using [`SdpNegotiator`](../micronaut-sdp/src/main/java/net/pilgrim/sip/sdp/SdpNegotiator.java) and [`SdpParser`](../micronaut-sdp/src/main/java/net/pilgrim/sip/sdp/SdpParser.java):
+
+```java
+SdpNegotiator negotiator = new SdpNegotiator();
+
+// 1. Generate an initial SDP offer for an allocated RTP port (e.g. port 10002)
+String offer = negotiator.createOffer(10002);
+/*
+v=0
+o=- 1791052800 1 IN IP4 0.0.0.0
+s=MicronautSIP
+c=IN IP4 0.0.0.0
+t=0 0
+m=audio 10002 RTP/AVP 0 8
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+a=sendrecv
+*/
+
+// 2. Generate a matching answer for an incoming offer on a local media port (e.g. port 10004)
+String answer = negotiator.createAnswer(offer, 10004);
+
+// 3. Inspect parsed SDP message fields
+SdpParser parser = new SdpParser();
+SdpMessage message = parser.parse(answer);
+int remoteAudioPort = message.getAudioPort();
+String direction = message.getDirection(); // "sendrecv", "sendonly", "recvonly", "inactive"
+```
+
+---
+
+## Example Reactive RTP Streaming (`micronaut-rtp`)
+
+Using Netty pipeline transport with [`RtpNettySender`](../micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/transport/RtpNettySender.java), [`RtpNettyReceiver`](../micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/transport/RtpNettyReceiver.java), and G.711 codec transcoding:
+
+```java
+// 1. Initialize receiver on loopback/bind address
+InetSocketAddress bindAddr = new InetSocketAddress("127.0.0.1", 10004);
+try (RtpNettyReceiver receiver = new RtpNettyReceiver(bindAddr)) {
+
+    // 2. Reactively subscribe to inbound RTP packets
+    receiver.incomingPackets().subscribe(inbound -> {
+        RtpPacket packet = inbound.packet();
+        System.out.println("Received RTP packet seq=" + packet.getSequenceNumber()
+                + " ts=" + packet.getTimestamp()
+                + " from " + inbound.senderAddress());
+    });
+
+    // 3. Stream 16-bit linear PCM audio frames encoded via G.711 PCMU (payload type 0)
+    InetSocketAddress target = new InetSocketAddress("127.0.0.1", receiver.getLocalPort());
+    RtpPacketizer packetizer = new RtpPacketizer(0, 8000, 1, 0); // PT 0, 8000 Hz, init seq=1, init ts=0
+
+    try (RtpNettySender sender = new RtpNettySender(target, packetizer)) {
+        byte[] pcm16Frame = new byte[320]; // 160 16-bit PCM samples = 20ms frame
+        sender.sendPcm16LeFrame(pcm16Frame, new G711UlawCodec(), true)
+              .block(Duration.ofSeconds(1));
     }
 }
 ```

@@ -2,20 +2,20 @@
 
 ## Automated Test Suites & Quality Assurance Architecture
 
-The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **130 automated JVM tests** across both Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
+The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **133 automated JVM tests** across all 4 Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
 
 ```mermaid
 flowchart TD
     L4["<b>Layer 4: Performance & Load Benchmarks</b><br/>SIPp v3.7 sustained 15,000 calls @ 50 cps & 1,000 burst calls @ 200 cps<br/>+ Netem loss benchmarks (20% & 30% packet loss)"]
     L3["<b>Layer 3: Protocol Conformance Testing</b><br/>ETSI TS 102 027-2 specification suite executed via sip-tt (100% passing)"]
-    L2["<b>Layer 2: Full-Stack Network Integration Tests</b><br/>:sip-app (28 tests over live Netty UDP datagram and TCP streaming sockets)"]
-    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (82 tests: parsers, fuzzers, rate limiters, timers, filters, sessions)"]
+    L2["<b>Layer 2: Full-Stack Network Integration Tests</b><br/>:sip-app (33 tests over live Netty UDP datagram, TCP streaming sockets, SDP, & RTP)"]
+    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (82 tests) | :micronaut-rtp (14 tests) | :micronaut-sdp (4 tests)"]
     L4 --> L3
     L3 --> L2
     L2 --> L1
 ```
 
-### Test Suites Summary (130 Automated Tests)
+### Test Suites Summary (133 Automated Tests)
 
 | Module | Test Suite Class | Tests | Primary Focus & Target Specifications |
 | :--- | :--- | :---: | :--- |
@@ -33,10 +33,15 @@ flowchart TD
 | `:micronaut-sip` | [`SipRouteBindingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRouteBindingTest.java) | 2 | Controller parameter binding annotations (`@SipCallId`, `@SipFrom`, `@SipParam`, etc.) |
 | `:micronaut-sip` | [`SipServerHealthIndicatorTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipServerHealthIndicatorTest.java) | 2 | Micronaut Management `/health` endpoint integration for UDP/TCP server and session metrics |
 | `:micronaut-sip` | [`SipTimerTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipTimerTest.java) | 28 | RFC 3261 timers: Timer A & E retransmissions, Timer B & F, Timer D ACK resend, Timer G & H UAS 2xx, Timer J replay, auto 100 Trying, TTL, virtual time, race conditions |
-| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 19 | Live UDP network call flows, SDP negotiation, registration, options, 400/405/420, netem packet drop & retransmission resilience |
-| `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 6 | End-to-end TCP streaming network call flows, framing reassembly, persistent reuse, RFC 5626 keep-alive |
+| `:micronaut-sdp` | [`SdpNegotiatorTest`](../micronaut-sdp/src/test/java/net/pilgrim/sdp/SdpNegotiatorTest.java) | 4 | RFC 4566 / RFC 3264 SDP parsing, offer generation, direction negotiation (hold), and codec filtering |
+| `:micronaut-rtp` | [`MediaPortManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/MediaPortManagerTest.java) | 2 | RFC 3550 §11 even RTP / companion odd RTCP dynamic port allocation and pool exhaustion handling |
+| `:micronaut-rtp` | [`RtpNettyStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/transport/RtpNettyStreamingTest.java) | 2 | Asynchronous Netty UDP pipeline packetization, framing, and reactive inbound packet streaming |
+| `:micronaut-rtp` | [`G711CodecTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/G711CodecTest.java) | 4 | RFC 3551 G.711 PCMU (payload type 0) & PCMA (payload type 8) audio transcoding and clipping fidelity |
+| `:micronaut-rtp` | [`RtpStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/RtpStreamingTest.java) | 3 | RFC 3550 packet serialization, header flag parsing, and offline sender/receiver streaming |
+| `:micronaut-rtp` | [`RtpMediaManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpMediaManagerTest.java) | 3 | Concurrent media session allocation, dedicated Netty event loop group isolation, and lifecycle teardown |
+| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 22 | Live UDP network call flows, late/early-offer SDP negotiation, dynamic RTP probe emission, netem packet drop resilience |
+| `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 8 | End-to-end TCP streaming network call flows, framing reassembly, persistent reuse, RFC 5626 keep-alive, TCP SDP/RTP integration |
 | `:sip-app` | [`SipAppTest`](../sip-app/src/test/java/net/pilgrim/SipAppTest.java) | 3 | Micronaut application context DI, compile-time route processor, duplicate route collision prevention |
-| Compatibility Suites | `com.example.*` (Legacy test coverage) | 20 | Backward-compatibility regression verification for parser, encoder, and TCP/UDP integration flows |
 
 ---
 
@@ -158,9 +163,47 @@ flowchart TD
 
 ---
 
-### Detailed Breakdown: `:sip-app` Integration Suites (28 Tests)
+### Detailed Breakdown: `:micronaut-sdp` Unit Suites (4 Tests)
 
-#### 1. [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) (19 Tests over UDP)
+#### 1. [`SdpNegotiatorTest`](../micronaut-sdp/src/test/java/net/pilgrim/sdp/SdpNegotiatorTest.java) (4 Tests)
+- **`generatesDefaultAudioOffer`**: Verifies generation of compliant RFC 4566 SDP offer strings with session identifiers, connection information (`c=IN IP4 0.0.0.0`), audio media descriptor (`m=audio <port> RTP/AVP 0 8`), and codec attribute mappings (`a=rtpmap:0 PCMU/8000`, `a=rtpmap:8 PCMA/8000`, `a=sendrecv`).
+- **`createsMatchingAnswerForOffer`**: Validates RFC 3264 offer/answer exchange: matches offered payload types against local supported codecs and binds the answer to a dynamically allocated local RTP audio port.
+- **`handlesHoldDirection`**: Validates directional call hold semantics: an incoming offer with `a=sendonly` is answered with `a=recvonly`, while `a=inactive` is preserved.
+- **`filtersUnsupportedCodecs`**: Confirms that unsupported or unknown codec payload types in incoming offers are filtered out of the negotiated SDP answer.
+
+---
+
+### Detailed Breakdown: `:micronaut-rtp` Streaming Suites (14 Tests)
+
+#### 1. [`MediaPortManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/MediaPortManagerTest.java) (2 Tests)
+- **`allocatesEvenPortsAndTracksState`**: Validates RFC 3550 §11 port allocation: dynamically assigns even UDP ports ($P$) for RTP and implicitly reserves the paired odd port ($P+1$) for RTCP within the configured range (default 10000–20000).
+- **`exhaustionThrowsException`**: Asserts that requesting additional ports when the pool capacity is saturated fails fast with `IllegalStateException` without leaking bitset indices.
+
+#### 2. [`RtpNettyStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/transport/RtpNettyStreamingTest.java) (2 Tests)
+- **`streamsRtpPacketOverNettyPipeline`**: Verifies asynchronous Netty pipeline serialization and transmission of G.711 $\mu$-law frames over `NioDatagramChannel` with sequence number and timestamp tracking.
+- **`receivesInboundPacketWithSenderMetadataReactively`**: Validates reactive packet intake via `RtpInboundPacket`, capturing source socket address metadata alongside decoded RTP payloads.
+
+#### 3. [`G711CodecTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/G711CodecTest.java) (4 Tests)
+- **`encodesAndDecodesUlaw`**: Verifies lossless / high-fidelity roundtrip transcoding between 16-bit linear PCM and ITU-T G.711 $\mu$-law (`PCMU`).
+- **`encodesAndDecodesAlaw`**: Verifies roundtrip transcoding between 16-bit linear PCM and ITU-T G.711 A-law (`PCMA`).
+- **`clippingBoundariesUlaw`**: Tests amplitude clamping and saturation handling at positive and negative 16-bit PCM extrema for $\mu$-law.
+- **`clippingBoundariesAlaw`**: Tests amplitude clamping and saturation handling at extrema for A-law.
+
+#### 4. [`RtpStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/RtpStreamingTest.java) (3 Tests)
+- **`serializesAndParsesRtpPacket`**: Tests RFC 3550 wire-level byte serialization and zero-copy packet header extraction (version, padding, extension, CSRC count, marker bit, payload type, sequence number, timestamp, SSRC).
+- **`packetizerIncrementsSequenceAndTimestamp`**: Verifies that `RtpPacketizer` monotonically increments sequence numbers and scales sample timestamps per 20ms packet duration (160 samples @ 8000 Hz).
+- **`blockingSocketSenderReceiverIntegration`**: Validates loopback UDP streaming using standard blocking I/O primitives (`RtpStreamSender` and `RtpStreamReceiver`).
+
+#### 5. [`RtpMediaManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpMediaManagerTest.java) (3 Tests)
+- **`createsAndTerminatesSession`**: Verifies lifecycle binding of `RtpMediaSession` by SIP `Call-ID`, verifying port allocation and channel closure on `terminateSession()`.
+- **`supportsConcurrentSessions`**: Verifies concurrent session allocation across independent threads without port collisions.
+- **`cleanShutdownClosesChannels`**: Confirms that graceful shutdown of `RtpMediaManager` closes all active Netty datagram channels and terminates the dedicated media event loop group.
+
+---
+
+### Detailed Breakdown: `:sip-app` Integration Suites (33 Tests)
+
+#### 1. [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) (22 Tests over UDP)
 - **`testServerIsRunning`**: Asserts that the Netty NIO datagram channel successfully binds to port 5060 and the application context starts cleanly.
 - **`testFullCallFlow`**: Executes complete RFC 3261 terminating dialog lifecycle over live UDP sockets:
   1. Client sends `INVITE` with SDP offer.
@@ -186,14 +229,19 @@ flowchart TD
 - **`testDroppedAckServerRetransmits200OkUntilAck`**: Simulates dropped `ACK` via packet filter: UAS Timer G continues retransmitting `200 OK` until the client's retransmitted second `ACK` arrives and cancels Timer G and H.
 - **`testDuplicateByeServerReplays200Ok`**: Enforces RFC 3261 §17.2.2: simulates duplicate/retransmitted `BYE` datagrams over the network; server replays cached `200 OK` from Timer J cache without invoking controller logic twice.
 - **`testRegisterRetransmittedMidProcessing`**: Tests in-flight idempotence: retransmitted `REGISTER` datagram arriving while registration transaction is being processed succeeds cleanly without race conditions.
+- **`testLateOfferAnswerFlowOverUdp`**: Validates late-offer negotiation over UDP: `INVITE` without SDP is answered with offer in `200 OK`, and client returns SDP answer in `ACK`.
+- **`testDynamicRtpPortAllocatedAndReleasedOnBye`**: Verifies that `CallController` allocates a dynamic Netty RTP port from `MediaPortManager` during call setup and deterministically releases it upon `BYE`.
+- **`testAckTriggersRtpProbeOverUdp`**: Verifies that receiving an `ACK` on a confirmed dialog triggers an initial RTP media probe packet to the client's negotiated media address over UDP.
 
-#### 2. [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) (6 Tests over TCP)
+#### 2. [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) (8 Tests over TCP)
 - **`testTcpServerIsRunning`**: Verifies that Netty TCP server socket channel binds and accepts incoming TCP connections on port 5060.
 - **`testFullCallFlowOverTcp`**: Executes the complete call signaling flow (`INVITE` -> `180 Ringing` -> `200 OK` -> `ACK` -> `BYE` -> `200 OK`) over a persistent, multiplexed TCP stream socket.
 - **`testMessageOverTcp`**: Verifies instant messaging (`MESSAGE`) framing and transaction delivery over TCP.
 - **`testRegisterOverTcp`**: Verifies registration transaction processing over TCP.
 - **`testOptionsOverTcp`**: Verifies `OPTIONS` capability exchange over TCP.
 - **`testTcpKeepAliveAndFraming`**: Tests RFC 5626 §4.4 keep-alive behavior: injects leading CRLF and double CRLF ping sequences before valid SIP frames; confirms `SipStreamFrameDecoder` discards keep-alive bytes without corrupting subsequent SIP message boundaries.
+- **`testLateOfferAnswerFlowOverTcp`**: Validates RFC 3261 / RFC 3264 late-offer/answer flow over persistent TCP streaming connections.
+- **`testAckTriggersRtpProbeWhenSignalingIsTcp`**: Confirms that RTP media sessions and probe packets are properly coordinated even when SIP signaling operates over TCP.
 
 #### 3. [`SipAppTest`](../sip-app/src/test/java/net/pilgrim/SipAppTest.java) (3 Tests)
 - **`testItWorks`**: Validates Micronaut dependency injection context initialization and verifies that `SipUdpServer` and `SipTcpServer` singleton beans are wired correctly.
@@ -204,14 +252,24 @@ flowchart TD
 
 ### Executing Automated Tests
 
-Execute all 130 tests across both modules:
+Execute all 133 tests across all 4 modules:
 ```bash
 ./gradlew check test
 ```
 
-Execute only the library unit test suite (`:micronaut-sip`):
+Execute only the SIP protocol unit test suite (`:micronaut-sip`):
 ```bash
 ./gradlew :micronaut-sip:test
+```
+
+Execute only the SDP negotiation test suite (`:micronaut-sdp`):
+```bash
+./gradlew :micronaut-sdp:test
+```
+
+Execute only the RTP media streaming test suite (`:micronaut-rtp`):
+```bash
+./gradlew :micronaut-rtp:test
 ```
 
 Execute only the network integration test suite (`:sip-app`):

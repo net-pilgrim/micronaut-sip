@@ -13,13 +13,14 @@ Benchmarks evaluated startup time, memory footprint (resident set size - RSS), a
 
 | Metric | JVM (Zulu JDK 25) | GraalVM Native Image | Delta / Improvement |
 | :--- | :--- | :--- | :--- |
-| **Startup Time** | `670 ms` | `16 – 22 ms` | **~30x – 40x faster** ⚡ |
-| **Initial Idle Memory (RSS)** | `~146 MB` | `~44 MB` | **70% reduction** 📉 |
+| **Startup Time** | `453 ms` | `13 ms` | **~35x faster** ⚡ |
+| **Initial Idle Memory (RSS)** | `~190 MB` | `~47 MB` | **75% reduction** 📉 |
 | **5-Min Memory (RSS) Graph** | `269 MB avg` / `278 MB peak`<br>`▅▇▇▇▇▇▇▇▇▇▇▇` *(180 → 278 MB)* | `92 MB avg` / `96 MB peak`<br>`▂▃▃▃▃▃▃▃▃▃▃▃` *(48 → 96 MB)* | **66% lower memory** 📉 |
 | **5-Min CPU Usage Graph** | `13.0% avg` / `126% peak (JIT)`<br>`█▄          ` *(avg 13%, peak 126%)* | `10.5% avg` / `15% peak`<br>` ▄▆▅▅▅▆▆▅▆▅ ` *(avg 10.5%, peak 15%)* | **Zero JIT spikes, 20% lower CPU** ⚡ |
-| **Peak Memory Under Load (1k calls)** | `~226 MB` | `~93 MB` | **59% reduction** 📉 |
+| **Peak Memory Under Load (1k calls)** | `~315 MB` | `~93 MB` | **70% reduction** 📉 |
 | **Binary / Artifact Size** | `14 MB` *(requires ~400MB JRE)* | `53 MB` *(standalone executable)* | **Self-contained (no JRE required)** |
 | **Throughput (15k calls / 5 min)** | `49.95 cps` (100% success) | `49.92 cps` (100% success) | **15,000 / 15,000 calls (0 loss)** |
+| **Throughput (1k burst @ 200 cps)** | `188.32 cps` (100% success) | `197.67 cps` (100% success) | **1,000 / 1,000 calls (0 loss)** |
 | **Failed Calls / Retransmissions** | `0` (0.0%) | `0` (0.0%) | **Zero packet loss** |
 | **Mean Call Latency** | `51.97 ms` | `51.90 ms` | **Sub-millisecond variance** |
 | **Latency P50 / P95 / P99** | `52ms / 55ms / 56ms` | `52ms / 54ms / 57ms` | **Low jitter & variance** |
@@ -80,12 +81,21 @@ xychart-beta
 ### Running SIPp Benchmarks
 
 ```bash
-# 1. Start application (JVM or Native executable)
+# 1. Start application:
+# Option A: GraalVM Native Executable
 ./sip-app/build/native/nativeCompile/sip-app
 
-# 2. Run 5-minute sustained SIPp load test (15,000 calls at 50 cps)
-sipp <TARGET_IP>:5060 -sn uac -m 15000 -r 50 -d 0 -trace_screen
+# Option B: JVM (Zulu JDK 25)
+java -jar sip-app/build/libs/sip-app-0.1.3-all.jar
+# or via Gradle:
+./gradlew :sip-app:run
 
-# 3. Run high-throughput SIPp load test (1,000 calls at 200 cps with RTT tracing)
-sipp <TARGET_IP>:5060 -sn uac -m 1000 -r 200 -d 0 -trace_rtt
+# 2. Run clean baseline load test (500 calls at 50 cps)
+sipp 127.0.0.1:5060 -sn uac -p 5080 -m 500 -r 50 -d 0 -trace_screen -trace_stat
+
+# 3. Run high-throughput burst load test (1,000 calls at 200 cps)
+sipp 127.0.0.1:5060 -sn uac -p 5080 -m 1000 -r 200 -d 0 -trace_screen -trace_stat
+
+# 4. Run 5-minute sustained SIPp load test (15,000 calls at 50 cps)
+sipp 127.0.0.1:5060 -sn uac -p 5080 -m 15000 -r 50 -d 0 -trace_screen -trace_stat
 ```
