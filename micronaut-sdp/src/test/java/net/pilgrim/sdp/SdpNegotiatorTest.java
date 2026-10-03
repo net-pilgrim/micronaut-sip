@@ -70,4 +70,15 @@ class SdpNegotiatorTest {
         assertTrue(audio.getFormats().contains("0"));
         assertEquals("sendrecv", audio.getDirectionAttribute());
     }
+
+    @Test
+    void createsOfferAndAnswerWithCustomDynamicPort() {
+        String offer = negotiator.createOffer(10500);
+        SdpMessage parsedOffer = parser.parse(offer);
+        assertEquals(10500, parsedOffer.findFirstAudioMedia().getPort());
+
+        String answer = negotiator.createAnswer(offer, 10502);
+        SdpMessage parsedAnswer = parser.parse(answer);
+        assertEquals(10502, parsedAnswer.findFirstAudioMedia().getPort());
+    }
 }

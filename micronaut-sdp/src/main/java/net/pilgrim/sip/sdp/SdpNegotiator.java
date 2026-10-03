@@ -56,10 +56,14 @@ public final class SdpNegotiator {
     }
 
     public String createOffer() {
+        return createOffer(this.localAudioPort);
+    }
+
+    public String createOffer(int localPort) {
         SdpMessage offer = createBaseLocalMessage();
         SdpMessage.MediaDescription media = new SdpMessage.MediaDescription(
                 "audio",
-                localAudioPort,
+                localPort > 0 ? localPort : localAudioPort,
                 mediaProtocol,
                 supportedPayloadTypes
         );
@@ -75,18 +79,26 @@ public final class SdpNegotiator {
     }
 
     public String createAnswer(String offerSdp) {
-        return createAnswer(parse(offerSdp));
+        return createAnswer(parse(offerSdp), this.localAudioPort);
+    }
+
+    public String createAnswer(String offerSdp, int localPort) {
+        return createAnswer(parse(offerSdp), localPort);
     }
 
     public String createAnswer(SdpMessage offer) {
+        return createAnswer(offer, this.localAudioPort);
+    }
+
+    public String createAnswer(SdpMessage offer, int localPort) {
         if (offer == null) {
-            return createOffer();
+            return createOffer(localPort);
         }
 
         SdpMessage answer = createBaseLocalMessage();
         SdpMessage.MediaDescription offeredAudio = offer.findFirstAudioMedia();
         if (offeredAudio == null) {
-            return createOffer();
+            return createOffer(localPort);
         }
 
         List<String> acceptedPayloads = negotiatePayloadTypes(offeredAudio.getFormats());
@@ -96,7 +108,7 @@ public final class SdpNegotiator {
 
         SdpMessage.MediaDescription mediaAnswer = new SdpMessage.MediaDescription(
                 "audio",
-                localAudioPort,
+                localPort > 0 ? localPort : localAudioPort,
                 offeredAudio.getProtocol() == null || offeredAudio.getProtocol().isBlank() ? mediaProtocol : offeredAudio.getProtocol(),
                 acceptedPayloads
         );

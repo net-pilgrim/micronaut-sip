@@ -77,12 +77,26 @@ public final class RtpPacket {
         return buffer.array();
     }
 
-    public static RtpPacket parse(byte[] packetBytes) {
-        if (packetBytes == null || packetBytes.length < FIXED_HEADER_BYTES) {
+    public void encode(io.netty.buffer.ByteBuf out) {
+        Objects.requireNonNull(out, "out");
+        out.writeByte(0x80); // version 2, no padding/extension/csrc
+        int second = payloadType & 0x7F;
+        if (marker) {
+            second |= 0x80;
+        }
+        out.writeByte(second);
+        out.writeShort(sequenceNumber & 0xFFFF);
+        out.writeInt((int) (timestamp & 0xFFFF_FFFFL));
+        out.writeInt((int) (ssrc & 0xFFFF_FFFFL));
+        out.writeBytes(payload);
+    }
+
+    public static RtpPacket parse(io.netty.buffer.ByteBuf buffer) {
+        if (buffer == null || buffer.readableBytes() < FIXED_HEADER_BYTES) {
             throw new IllegalArgumentException("RTP packet must be at least 12 bytes");
         }
 
-        int first = packetBytes[0] & 0xFF;
+        short first = buffer.readUnsignedByte();
         int version = (first >>> 6) & 0x03;
         if (version != 2) {
             throw new IllegalArgumentException("Unsupported RTP version: " + version);
@@ -92,49 +106,60 @@ public final class RtpPacket {
         int csrcCount = first & 0x0F;
 
         int headerSize = FIXED_HEADER_BYTES + csrcCount * 4;
-        if (packetBytes.length < headerSize) {
+        if (buffer.readableBytes() + 1 < headerSize) {
             throw new IllegalArgumentException("Invalid RTP packet: truncated CSRC list");
         }
 
-        if (extension) {
-            if (packetBytes.length < headerSize + 4) {
-                throw new IllegalArgumentException("Invalid RTP packet: truncated extension header");
-            }
-            int extensionLengthWords =
-                    ((packetBytes[headerSize + 2] & 0xFF) << 8) | (packetBytes[headerSize + 3] & 0xFF);
-            headerSize += 4 + extensionLengthWords * 4;
-            if (packetBytes.length < headerSize) {
-                throw new IllegalArgumentException("Invalid RTP packet: truncated extension payload");
-            }
-        }
-
-        int second = packetBytes[1] & 0xFF;
+        short second = buffer.readUnsignedByte();
         boolean marker = (second & 0x80) != 0;
         int payloadType = second & 0x7F;
-        int sequenceNumber = ((packetBytes[2] & 0xFF) << 8) | (packetBytes[3] & 0xFF);
-        long timestamp =
-                ((packetBytes[4] & 0xFFL) << 24)
-                        | ((packetBytes[5] & 0xFFL) << 16)
-                        | ((packetBytes[6] & 0xFFL) << 8)
-                        | (packetBytes[7] & 0xFFL);
-        long ssrc =
-                ((packetBytes[8] & 0xFFL) << 24)
-                        | ((packetBytes[9] & 0xFFL) << 16)
-                        | ((packetBytes[10] & 0xFFL) << 8)
-                        | (packetBytes[11] & 0xFFL);
+        int sequenceNumber = buffer.readUnsignedShort();
+        long timestamp = buffer.readUnsignedInt();
+        long ssrc = buffer.readUnsignedInt();
 
-        int payloadStart = headerSize;
-        int payloadEnd = packetBytes.length;
-        if (padding) {
-            int paddingBytes = packetBytes[packetBytes.length - 1] & 0xFF;
-            if (paddingBytes <= 0 || paddingBytes > packetBytes.length - payloadStart) {
-                throw new IllegalArgumentException("Invalid RTP packet padding length");
-            }
-            payloadEnd -= paddingBytes;
+        if (csrcCount > 0) {
+            buffer.skipBytes(csrcCount * 4);
         }
 
-        byte[] payload = Arrays.copyOfRange(packetBytes, payloadStart, payloadEnd);
+        if (extension) {
+            if (buffer.readableBytes() < 4) {
+                throw new IllegalArgumentException("Invalid RTP packet: truncated extension header");
+            }
+            buffer.skipBytes(2);
+            int extensionLengthWords = buffer.readUnsignedShort();
+            int extensionBytes = extensionLengthWords * 4;
+            if (buffer.readableBytes() < extensionBytes) {
+                throw new IllegalArgumentException("Invalid RTP packet: truncated extension payload");
+            }
+            buffer.skipBytes(extensionBytes);
+        }
+
+        int payloadLength = buffer.readableBytes();
+        int paddingBytes = 0;
+        if (padding) {
+            if (payloadLength <= 0) {
+                throw new IllegalArgumentException("Invalid RTP packet padding length");
+            }
+            paddingBytes = buffer.getUnsignedByte(buffer.writerIndex() - 1);
+            if (paddingBytes <= 0 || paddingBytes > payloadLength) {
+                throw new IllegalArgumentException("Invalid RTP packet padding length");
+            }
+            payloadLength -= paddingBytes;
+        }
+
+        byte[] payload = new byte[payloadLength];
+        buffer.readBytes(payload);
+        if (paddingBytes > 0) {
+            buffer.skipBytes(paddingBytes);
+        }
         return new RtpPacket(marker, payloadType, sequenceNumber, timestamp, ssrc, payload);
+    }
+
+    public static RtpPacket parse(byte[] packetBytes) {
+        if (packetBytes == null) {
+            throw new IllegalArgumentException("packetBytes cannot be null");
+        }
+        return parse(io.netty.buffer.Unpooled.wrappedBuffer(packetBytes));
     }
 }
 

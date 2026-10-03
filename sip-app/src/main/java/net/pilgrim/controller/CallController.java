@@ -1,9 +1,12 @@
 package net.pilgrim.controller;
 
+import jakarta.inject.Inject;
 import net.pilgrim.sip.rtp.RtpPacketizer;
 import net.pilgrim.sip.rtp.RtpStreamSender;
 import net.pilgrim.sip.rtp.codec.RtpCodec;
 import net.pilgrim.sip.rtp.codec.RtpCodecRegistry;
+import net.pilgrim.sip.rtp.media.RtpMediaManager;
+import net.pilgrim.sip.rtp.media.RtpMediaSession;
 import net.pilgrim.sip.annotation.*;
 import net.pilgrim.sip.model.SipHeaders;
 import net.pilgrim.sip.model.SipRequest;
@@ -19,6 +22,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.io.IOException;
 import java.time.Duration;
@@ -36,6 +40,21 @@ public class CallController {
     private static final SdpNegotiator SDP_NEGOTIATOR = new SdpNegotiator();
     private static final SdpParser SDP_PARSER = new SdpParser();
     private static final RtpCodecRegistry RTP_CODECS = RtpCodecRegistry.withG711Defaults();
+
+    private final RtpMediaManager rtpMediaManager;
+
+    public CallController() {
+        this(new RtpMediaManager());
+    }
+
+    @Inject
+    public CallController(RtpMediaManager rtpMediaManager) {
+        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+    }
+
+    public RtpMediaManager getRtpMediaManager() {
+        return rtpMediaManager;
+    }
 
     /**
      * Handles INVITE requests reactively.
@@ -55,18 +74,26 @@ public class CallController {
         session.setAttribute("sdpOffer", sdpOffer);
         session.setAttribute("awaitingAckSdpAnswer", false);
 
+        int localAudioPort = 49170;
+        try {
+            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
+            localAudioPort = mediaSession.getLocalPort();
+        } catch (Exception e) {
+            LOG.warn("Failed to allocate dynamic Netty RTP port for Call-ID: {}", callId, e);
+        }
+
         // 180 Ringing provisional response
         SipResponse ringing = SipResponse.ringing(request);
 
         // 200 OK carries SDP answer for early-offer INVITE and SDP offer for late-offer INVITE.
         SipResponse ok;
         if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer);
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort);
             session.setAttribute("sdpAnswer", answer);
             ok = SipResponse.ok(request, answer, "application/sdp");
         } else {
             session.setAttribute("awaitingAckSdpAnswer", true);
-            String localOffer = SDP_NEGOTIATOR.createOffer();
+            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort);
             session.setAttribute("localSdpOffer", localOffer);
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
@@ -101,14 +128,23 @@ public class CallController {
         session.setState(SipSession.State.EARLY);
         session.setAttribute("sdpOffer", sdpOffer);
         session.setAttribute("awaitingAckSdpAnswer", false);
+
+        int localAudioPort = 49170;
+        try {
+            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
+            localAudioPort = mediaSession.getLocalPort();
+        } catch (Exception e) {
+            LOG.warn("Failed to allocate dynamic Netty RTP port for slow Call-ID: {}", callId, e);
+        }
+
         SipResponse ok;
         if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer);
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort);
             session.setAttribute("sdpAnswer", answer);
             ok = SipResponse.ok(request, answer, "application/sdp");
         } else {
             session.setAttribute("awaitingAckSdpAnswer", true);
-            String localOffer = SDP_NEGOTIATOR.createOffer();
+            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort);
             session.setAttribute("localSdpOffer", localOffer);
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
@@ -160,6 +196,7 @@ public class CallController {
                                    SipSession session) {
         LOG.info("Received BYE for Call-ID: {}, terminating session.", callId);
         session.setState(SipSession.State.TERMINATED);
+        rtpMediaManager.terminateSession(callId);
         return Mono.just(SipResponse.ok(request));
     }
 
@@ -174,6 +211,7 @@ public class CallController {
         if (session != null) {
             session.setState(SipSession.State.TERMINATED);
         }
+        rtpMediaManager.terminateSession(callId);
     }
 
     /**
@@ -261,6 +299,22 @@ public class CallController {
         String host = parseConnectionHost(parsed.getConnection()).orElse("127.0.0.1");
         byte[] silencePcm16Le = new byte[160 * 2];
         RtpCodec selectedCodec = codec.get();
+
+        Optional<RtpMediaSession> mediaSessionOpt = rtpMediaManager.findSession(callId);
+        if (mediaSessionOpt.isPresent()) {
+            try {
+                RtpMediaSession mediaSession = mediaSessionOpt.get();
+                mediaSession.setRemoteAddress(new InetSocketAddress(InetAddress.getByName(host), audio.getPort()));
+                mediaSession.setCodec(selectedCodec);
+                mediaSession.sendAudioFrame(silencePcm16Le, true).block(Duration.ofSeconds(2));
+                LOG.info("Sent Netty RTP probe frame (codec={} pt={} {}:{}) for Call-ID: {}",
+                        selectedCodec.name(), selectedCodec.payloadType(), host, audio.getPort(), callId);
+                return;
+            } catch (Exception e) {
+                LOG.warn("Failed to send Netty RTP probe frame for Call-ID: {}, falling back", callId, e);
+            }
+        }
+
         RtpPacketizer packetizer = new RtpPacketizer(selectedCodec.payloadType(), selectedCodec.clockRate());
         try (RtpStreamSender sender = new RtpStreamSender(
                 InetAddress.getByName(host),
@@ -268,7 +322,7 @@ public class CallController {
                 packetizer
         )) {
             sender.sendPcm16LeFrame(silencePcm16Le, selectedCodec, true);
-            LOG.info("Sent RTP probe frame (codec={} pt={} {}:{}) for Call-ID: {}",
+            LOG.info("Sent fallback RTP probe frame (codec={} pt={} {}:{}) for Call-ID: {}",
                     selectedCodec.name(), selectedCodec.payloadType(), host, audio.getPort(), callId);
         } catch (UnknownHostException e) {
             LOG.warn("Failed to resolve RTP host '{}' for Call-ID: {}", host, callId, e);

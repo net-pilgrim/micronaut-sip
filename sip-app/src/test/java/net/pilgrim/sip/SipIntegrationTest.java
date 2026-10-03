@@ -44,6 +44,9 @@ class SipIntegrationTest {
     @Inject
     net.pilgrim.sip.router.SipDispatcher dispatcher;
 
+    @Inject
+    net.pilgrim.sip.rtp.media.RtpMediaManager mediaManager;
+
     @org.junit.jupiter.api.BeforeEach
     @org.junit.jupiter.api.AfterEach
     void cleanupCaches() {
@@ -184,6 +187,65 @@ class SipIntegrationTest {
             net.pilgrim.sip.rtp.RtpPacket rtpPacket = net.pilgrim.sip.rtp.RtpPacket.parse(raw);
             assertEquals(0, rtpPacket.getPayloadType());
             assertEquals(160, rtpPacket.getPayload().length, "Expected one 20ms G.711 frame");
+        }
+    }
+
+    @Test
+    void testDynamicRtpPortAllocatedAndReleasedOnBye() throws Exception {
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
+        String callId = "dynamic-rtp-test-" + UUID.randomUUID();
+
+        try (DatagramSocket rtpReceiver = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
+            rtpReceiver.setSoTimeout(3000);
+            String sdpOffer =
+                    "v=0\r\n" +
+                            "o=Alice 1020 1020 IN IP4 127.0.0.1\r\n" +
+                            "s=Offer\r\n" +
+                            "c=IN IP4 127.0.0.1\r\n" +
+                            "t=0 0\r\n" +
+                            "m=audio " + rtpReceiver.getLocalPort() + " RTP/AVP 0\r\n";
+
+            SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
+                    .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                    .to("<sip:bob@127.0.0.1>")
+                    .callId(callId)
+                    .contentType("application/sdp")
+                    .body(sdpOffer)
+                    .build();
+
+            List<SipResponse> responses = client.sendWithProvisional(invite, serverAddress)
+                    .collectList()
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(responses);
+            SipResponse ok = responses.get(1);
+
+            // Verify SDP answer has a dynamic media port allocated by RtpMediaManager
+            net.pilgrim.sip.sdp.SdpMessage parsedAnswer = new net.pilgrim.sip.sdp.SdpParser().parse(ok.getBodyAsString());
+            int allocatedServerPort = parsedAnswer.findFirstAudioMedia().getPort();
+            assertTrue(allocatedServerPort >= 10000 && allocatedServerPort <= 20000,
+                    "Allocated port " + allocatedServerPort + " must be within RTP range 10000-20000");
+            assertTrue(allocatedServerPort % 2 == 0, "Allocated RTP port must be even");
+
+            // Verify session is active in media manager
+            assertTrue(mediaManager.findSession(callId).isPresent());
+            assertEquals(allocatedServerPort, mediaManager.findSession(callId).get().getLocalPort());
+
+            // ACK
+            client.sendAck(invite, ok, serverAddress).block(Duration.ofSeconds(2));
+
+            // Verify RTP packet arrived from the server's allocated Netty media port
+            byte[] buf = new byte[1500];
+            DatagramPacket packet = new DatagramPacket(buf, buf.length);
+            rtpReceiver.receive(packet);
+            assertEquals(allocatedServerPort, packet.getPort(), "RTP probe must originate from allocated Netty media port");
+
+            // BYE
+            SipResponse byeResponse = client.sendBye(invite, ok, serverAddress).block(Duration.ofSeconds(3));
+            assertNotNull(byeResponse);
+            assertEquals(200, byeResponse.getStatusCode());
+
+            // Verify media session was terminated and port released
+            assertTrue(mediaManager.findSession(callId).isEmpty(), "Media session must be cleaned up on BYE");
         }
     }
 

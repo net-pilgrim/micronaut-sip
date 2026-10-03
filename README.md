@@ -120,10 +120,12 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Lightweight SDP parser/model (`SdpParser`, `SdpMessage`) for session-level fields, media lines, and attributes.
     - Offer/answer helper (`SdpNegotiator`) supporting default audio offer generation and direction-aware SDP answer generation.
 
-15. **Barebone RTP Streaming Module (`micronaut-rtp`)**:
-    - RTP packet model/parser (`RtpPacket`) and stream packetizer (`RtpPacketizer`) for sequence/timestamp progression.
-    - UDP send/receive primitives (`RtpStreamSender`, `RtpStreamReceiver`) for simple audio transport flows.
-    - Pluggable codec SPI (`RtpCodec`, `RtpCodecRegistry`) with initial G.711 support (`PCMU`/payload type `0`, `PCMA`/payload type `8`) and room for additional codecs.
+15. **High-Performance RTP Streaming Module (`micronaut-rtp`)**:
+    - RTP packet model/parser (`RtpPacket`) with zero-copy Netty `ByteBuf` and `byte[]` serialization, and stream packetizer (`RtpPacketizer`).
+    - Asynchronous Netty UDP transport (`RtpNettyReceiver`, `RtpNettySender`, `RtpDatagramCodec`) powered by dedicated media event loops.
+    - High-concurrency media session coordinator (`RtpMediaManager`, `RtpMediaSession`) with dynamic port pair allocation (`MediaPortManager`, RFC 3550 §11) and symmetric RTP latching (RFC 4961).
+    - Pluggable codec SPI (`RtpCodec`, `RtpCodecRegistry`) with G.711 support (`PCMU`/payload type `0`, `PCMA`/payload type `8`).
+    - Standard blocking primitives (`RtpStreamSender`, `RtpStreamReceiver`) retained for lightweight/offline tooling.
 
 ---
 
