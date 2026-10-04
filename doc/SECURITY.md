@@ -8,9 +8,8 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability within Micronaut SIP, please do NOT create a public issue.
-
-Instead, please send an email reporting the vulnerability to the project maintainers or open a private GitHub security advisory.
+If you discover a security vulnerability within Micronaut SIP, please DO create a public issue.
+I want security issues to be visible and addressed by community also.
 
 Please include:
 - A description of the vulnerability and its potential impact.
