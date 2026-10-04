@@ -1,6 +1,7 @@
 package net.pilgrim.sip.client;
 
 import net.pilgrim.sip.config.SipServerConfiguration;
+import net.pilgrim.sip.dtmf.DtmfSignal;
 import net.pilgrim.sip.model.*;
 import net.pilgrim.sip.transport.SipNettyServer;
 import net.pilgrim.sip.transport.SipResponseRouter;
@@ -563,6 +564,52 @@ public class ReactiveSipClient {
         }
 
         return send(cancel, destination, transport);
+    }
+
+    /**
+     * Sends a mid-dialog DTMF tone using SIP INFO (RFC 2976 / RFC 6086) with application/dtmf-relay.
+     */
+    public Mono<SipResponse> sendDtmf(SipRequest originalInvite, SipResponse okResponse, DtmfSignal signal, InetSocketAddress destination) {
+        return sendDtmf(originalInvite, okResponse, signal, destination, resolveTransport(originalInvite));
+    }
+
+    public Mono<SipResponse> sendDtmf(SipRequest originalInvite, SipResponse okResponse, DtmfSignal signal, InetSocketAddress destination, SipTransport transport) {
+        SipRequest info = new SipRequest(SipMethod.INFO, originalInvite.getUri());
+        info.setTransport(transport);
+        SipHeaders headers = info.getHeaders();
+        headers.setCallId(okResponse.getCallId());
+        headers.setFrom(okResponse.getFrom());
+        headers.setTo(okResponse.getTo());
+        headers.setCSeq(cseqCounter.incrementAndGet() + " INFO");
+        headers.setMaxForwards(70);
+        info.setDtmf(signal);
+        return send(info, destination, transport);
+    }
+
+    /**
+     * Sends a DTMF signal using SIP MESSAGE (RFC 3428).
+     */
+    public Mono<SipResponse> sendDtmfMessage(String targetUri, DtmfSignal signal, InetSocketAddress destination) {
+        return sendDtmfMessage(targetUri, signal, destination, SipTransport.UDP);
+    }
+
+    public Mono<SipResponse> sendDtmfMessage(String targetUri, DtmfSignal signal, InetSocketAddress destination, SipTransport transport) {
+        int localPort = (transport == SipTransport.TCP) ? server.getTcpPort() : server.getUdpPort();
+        SipRequest msg = SipRequest.builder(SipMethod.MESSAGE, targetUri)
+                .from("<sip:client@127.0.0.1:" + localPort + ">;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                .to("<" + targetUri + ">")
+                .callId("dtmf-msg-" + UUID.randomUUID())
+                .dtmf(signal)
+                .build();
+        msg.setTransport(transport);
+        return send(msg, destination);
+    }
+
+    /**
+     * Sends a general SIP INFO request (RFC 2976 / RFC 6086).
+     */
+    public Mono<SipResponse> sendInfo(SipRequest request, InetSocketAddress destination) {
+        return send(request, destination);
     }
 
     private SipRequest buildAck(SipRequest originalInvite, SipResponse okResponse, SipTransport transport) {

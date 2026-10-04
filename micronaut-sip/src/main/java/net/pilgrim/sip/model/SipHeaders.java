@@ -31,6 +31,12 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
     public static final String REQUIRE = "Require";
     public static final String UNSUPPORTED = "Unsupported";
     public static final String RETRY_AFTER = "Retry-After";
+    public static final String INFO_PACKAGE = "Info-Package"; // RFC 6086
+    public static final String RECV_INFO = "Recv-Info";       // RFC 6086
+
+    // Common standard MIME content types for DTMF
+    public static final String APPLICATION_DTMF_RELAY = "application/dtmf-relay"; // RFC 2976 / RFC 6086
+    public static final String APPLICATION_DTMF = "application/dtmf";
 
     private static final Map<String, String> COMPACT_TO_CANONICAL = new HashMap<>();
     private static final Map<String, String> CANONICAL_NAMES = new HashMap<>();
@@ -58,6 +64,8 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
         registerCanonical(REQUIRE);
         registerCanonical(UNSUPPORTED);
         registerCanonical(RETRY_AFTER);
+        registerCanonical(INFO_PACKAGE);
+        registerCanonical(RECV_INFO);
 
         // Compact forms as defined in RFC 3261 Section 7.3.3
         COMPACT_TO_CANONICAL.put("v", VIA);

@@ -1,6 +1,7 @@
 package net.pilgrim.sip;
 
 import net.pilgrim.sip.client.ReactiveSipClient;
+import net.pilgrim.sip.dtmf.DtmfSignal;
 import net.pilgrim.sip.model.SipMethod;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
@@ -210,6 +211,52 @@ class SipTcpIntegrationTest {
         SipResponse response = client.send(message, tcpAddress).block(Duration.ofSeconds(3));
         assertNotNull(response);
         assertEquals(200, response.getStatusCode());
+    }
+
+    @Test
+    void testDtmfOverTcp() {
+        InetSocketAddress tcpAddress = new InetSocketAddress("127.0.0.1", server.getTcpPort());
+        String callId = "test-tcp-dtmf-" + UUID.randomUUID();
+
+        String sdpOffer =
+                "v=0\r\n" +
+                "o=Alice 2000 2000 IN IP4 127.0.0.1\r\n" +
+                "s=Offer\r\n" +
+                "c=IN IP4 127.0.0.1\r\n" +
+                "t=0 0\r\n" +
+                "m=audio 31000 RTP/AVP 0\r\n";
+
+        SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getTcpPort() + ";transport=tcp")
+                .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                .to("<sip:bob@127.0.0.1>")
+                .callId(callId)
+                .contentType("application/sdp")
+                .body(sdpOffer)
+                .build();
+
+        // 1. Establish call over TCP
+        List<SipResponse> responses = client.sendWithProvisional(invite, tcpAddress).collectList().block(Duration.ofSeconds(5));
+        assertNotNull(responses);
+        SipResponse ok = responses.get(1);
+        assertEquals(200, ok.getStatusCode());
+
+        client.sendAck(invite, ok, tcpAddress).block(Duration.ofSeconds(2));
+
+        // 2. Send DTMF via INFO over TCP
+        DtmfSignal dtmf = DtmfSignal.of('5', 180);
+        SipResponse dtmfResp = client.sendDtmf(invite, ok, dtmf, tcpAddress).block(Duration.ofSeconds(3));
+        assertNotNull(dtmfResp);
+        assertEquals(200, dtmfResp.getStatusCode());
+        assertEquals("5", dtmfResp.getHeaders().get("X-Received-DTMF"));
+
+        Optional<SipSession> sessionOpt = sessionManager.findSession(callId);
+        assertTrue(sessionOpt.isPresent());
+        assertEquals("5", sessionOpt.get().getAttribute("dtmfDigits"));
+
+        // 3. Bye over TCP
+        SipResponse bye = client.sendBye(invite, ok, tcpAddress).block(Duration.ofSeconds(3));
+        assertNotNull(bye);
+        assertEquals(200, bye.getStatusCode());
     }
 
     @Test

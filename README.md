@@ -47,6 +47,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
    - `@OnRegister`: Handles SIP `REGISTER` requests.
    - `@OnOptions`: Handles SIP `OPTIONS` requests.
    - `@OnMessage`: Handles SIP `MESSAGE` instant messaging (RFC 3428).
+   - `@OnInfo`: Handles SIP `INFO` requests for mid-dialog signaling and DTMF relay (RFC 2976 / RFC 6086).
    - `@OnSipMethod`: Generic handler for arbitrary SIP methods.
    - `@SipCallId`: Injects `Call-ID` directly into method parameters.
    - `@SipFrom`: Injects `From` header string or parsed `SipUri`.
@@ -54,6 +55,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
    - `@SipParam`: Injects request-URI parameters with default values and type conversion (`String`, `int`, `long`, `boolean`).
    - `@SipHeader`: Injects SIP headers directly into method parameters with primitive type conversion.
    - `@SipBody`: Injects the message body (e.g., SDP or text) as `String` or `byte[]`.
+   - `@SipDtmf`: Injects parsed DTMF tones (`DtmfSignal`, `char`, `String`) from `application/dtmf-relay` or `application/dtmf` bodies.
 
 4. **End-to-End Reactive Programming**:
    - Controller methods can return:

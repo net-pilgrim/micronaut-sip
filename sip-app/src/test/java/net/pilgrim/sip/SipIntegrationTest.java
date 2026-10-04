@@ -1,6 +1,7 @@
 package net.pilgrim.sip;
 
 import net.pilgrim.sip.client.ReactiveSipClient;
+import net.pilgrim.sip.dtmf.DtmfSignal;
 import net.pilgrim.sip.model.SipMethod;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
@@ -365,16 +366,94 @@ class SipIntegrationTest {
     @Test
     void testUnsupportedMethodReturnsMethodNotAllowed() {
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
-        SipRequest info = SipRequest.builder(SipMethod.INFO, "sip:bob@127.0.0.1:" + server.getPort())
-                .from("<sip:alice@127.0.0.1>;tag=info123")
+        SipRequest subscribe = SipRequest.builder(SipMethod.SUBSCRIBE, "sip:bob@127.0.0.1:" + server.getPort())
+                .from("<sip:alice@127.0.0.1>;tag=sub123")
                 .to("<sip:bob@127.0.0.1>")
                 .build();
 
-        SipResponse response = client.send(info, serverAddress).block(Duration.ofSeconds(3));
+        SipResponse response = client.send(subscribe, serverAddress).block(Duration.ofSeconds(3));
         assertNotNull(response);
         assertEquals(405, response.getStatusCode());
         assertNotNull(response.getHeaders().get("Allow"));
         assertTrue(response.getHeaders().get("Allow").contains("INVITE"));
+    }
+
+    @Test
+    void testDtmfOverSipInfoMidDialog() {
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
+        String callId = "test-dtmf-call-" + UUID.randomUUID();
+
+        String sdpOffer =
+                "v=0\r\n" +
+                "o=Alice 1000 1000 IN IP4 127.0.0.1\r\n" +
+                "s=Offer\r\n" +
+                "c=IN IP4 127.0.0.1\r\n" +
+                "t=0 0\r\n" +
+                "m=audio 30000 RTP/AVP 0\r\n";
+
+        SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
+                .from("<sip:alice@127.0.0.1>;tag=dtmf-alice")
+                .to("<sip:bob@127.0.0.1>")
+                .callId(callId)
+                .contentType("application/sdp")
+                .body(sdpOffer)
+                .build();
+
+        // 1. Establish call
+        List<SipResponse> responses = client.sendWithProvisional(invite, serverAddress)
+                .collectList()
+                .block(Duration.ofSeconds(5));
+        assertNotNull(responses);
+        assertEquals(2, responses.size());
+        SipResponse ok = responses.get(1);
+        assertEquals(200, ok.getStatusCode());
+
+        client.sendAck(invite, ok, serverAddress).block(Duration.ofSeconds(2));
+
+        // 2. Send DTMF tones via INFO (RFC 2976 / RFC 6086) with application/dtmf-relay
+        char[] digits = {'1', '2', '3', '4', '#'};
+        for (char d : digits) {
+            DtmfSignal signal = DtmfSignal.of(d, 160);
+            SipResponse infoResp = client.sendDtmf(invite, ok, signal, serverAddress).block(Duration.ofSeconds(3));
+            assertNotNull(infoResp);
+            assertEquals(200, infoResp.getStatusCode());
+            assertEquals(String.valueOf(d), infoResp.getHeaders().get("X-Received-DTMF"));
+        }
+
+        // Verify session accumulated the DTMF digits
+        Optional<SipSession> sessionOpt = sessionManager.findSession(callId);
+        assertTrue(sessionOpt.isPresent());
+        assertEquals("1234#", sessionOpt.get().getAttribute("dtmfDigits"));
+
+        // 3. Terminate call with BYE
+        SipResponse byeResponse = client.sendBye(invite, ok, serverAddress).block(Duration.ofSeconds(3));
+        assertNotNull(byeResponse);
+        assertEquals(200, byeResponse.getStatusCode());
+    }
+
+    @Test
+    void testDtmfOverSipMessage() {
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
+
+        // 1. Send DTMF via MESSAGE with application/dtmf-relay
+        DtmfSignal relaySignal = DtmfSignal.of('9', 200);
+        SipResponse relayResp = client.sendDtmfMessage("sip:bob@127.0.0.1:" + server.getPort(), relaySignal, serverAddress)
+                .block(Duration.ofSeconds(3));
+        assertNotNull(relayResp);
+        assertEquals(200, relayResp.getStatusCode());
+        assertEquals("9", relayResp.getHeaders().get("X-Received-DTMF"));
+
+        // 2. Send DTMF via MESSAGE with application/dtmf
+        SipRequest dtmfMsg = SipRequest.builder(SipMethod.MESSAGE, "sip:bob@127.0.0.1:" + server.getPort())
+                .from("<sip:alice@127.0.0.1>;tag=dtmfplain")
+                .to("<sip:bob@127.0.0.1>")
+                .callId("dtmf-plain-" + UUID.randomUUID())
+                .dtmf(DtmfSignal.of('*'), "application/dtmf")
+                .build();
+        SipResponse plainResp = client.send(dtmfMsg, serverAddress).block(Duration.ofSeconds(3));
+        assertNotNull(plainResp);
+        assertEquals(200, plainResp.getStatusCode());
+        assertEquals("*", plainResp.getHeaders().get("X-Received-DTMF"));
     }
 
     @Test

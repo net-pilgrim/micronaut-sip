@@ -236,6 +236,9 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
             } else if (method.hasAnnotation(OnMessage.class)) {
                 sipMethod = SipMethod.MESSAGE;
                 path = method.stringValue(OnMessage.class).orElse("");
+            } else if (method.hasAnnotation(OnInfo.class)) {
+                sipMethod = SipMethod.INFO;
+                path = method.stringValue(OnInfo.class).orElse("");
             }
         }
 
@@ -316,6 +319,10 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                 OnMessage ann = method.getAnnotation(OnMessage.class);
                 String pattern = combinePattern(prefix, ann.value());
                 addRoute(new SipRoute(SipMethod.MESSAGE, null, pattern, controller, method));
+            } else if (method.isAnnotationPresent(OnInfo.class)) {
+                OnInfo ann = method.getAnnotation(OnInfo.class);
+                String pattern = combinePattern(prefix, ann.value());
+                addRoute(new SipRoute(SipMethod.INFO, null, pattern, controller, method));
             } else if (method.isAnnotationPresent(OnSipMethod.class)) {
                 OnSipMethod ann = method.getAnnotation(OnSipMethod.class);
                 String pattern = combinePattern(prefix, ann.path());

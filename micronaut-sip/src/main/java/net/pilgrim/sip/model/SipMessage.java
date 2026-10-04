@@ -131,6 +131,62 @@ public abstract class SipMessage {
         return headers.getContentLength();
     }
 
+    /**
+     * Checks if this SIP message carries a DTMF signal (RFC 2976 / RFC 6086 / RFC 3428).
+     */
+    public boolean isDtmf() {
+        String ct = getContentType();
+        if (ct != null) {
+            String lower = ct.toLowerCase(java.util.Locale.ROOT);
+            if (lower.contains("application/dtmf-relay") || lower.contains("application/dtmf")) {
+                return true;
+            }
+        }
+        String infoPkg = headers.get(SipHeaders.INFO_PACKAGE);
+        if (infoPkg != null && infoPkg.toLowerCase(java.util.Locale.ROOT).contains("dtmf")) {
+            return true;
+        }
+        if (body != null && body.length > 0) {
+            return net.pilgrim.sip.dtmf.DtmfSignal.tryParse(getBodyAsString(), ct).isPresent();
+        }
+        return false;
+    }
+
+    /**
+     * Parses and returns the DTMF signal from this message, if present.
+     */
+    public java.util.Optional<net.pilgrim.sip.dtmf.DtmfSignal> getDtmfSignal() {
+        if (body == null || body.length == 0) {
+            return java.util.Optional.empty();
+        }
+        return net.pilgrim.sip.dtmf.DtmfSignal.tryParse(getBodyAsString(), getContentType());
+    }
+
+    /**
+     * Sets the DTMF signal in this message body with standard application/dtmf-relay content type
+     * (RFC 2976 / RFC 6086).
+     */
+    public void setDtmf(net.pilgrim.sip.dtmf.DtmfSignal signal) {
+        setDtmf(signal, SipHeaders.APPLICATION_DTMF_RELAY);
+    }
+
+    /**
+     * Sets the DTMF signal in this message body with the specified content type
+     * (e.g. application/dtmf-relay or application/dtmf).
+     */
+    public void setDtmf(net.pilgrim.sip.dtmf.DtmfSignal signal, String contentType) {
+        if (signal == null) {
+            throw new IllegalArgumentException("DtmfSignal cannot be null");
+        }
+        String targetCt = (contentType != null && !contentType.isBlank()) ? contentType : SipHeaders.APPLICATION_DTMF_RELAY;
+        headers.setContentType(targetCt);
+        if (targetCt.toLowerCase(java.util.Locale.ROOT).contains("application/dtmf-relay")) {
+            setBody(signal.toRelayBody());
+        } else {
+            setBody(signal.toDtmfBody());
+        }
+    }
+
     public abstract boolean isRequest();
 
     public boolean isResponse() {

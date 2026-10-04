@@ -98,15 +98,40 @@ public class CallController {
     @OnOptions
     public SipResponse onOptions(SipRequest request) {
         SipResponse response = SipResponse.ok(request);
-        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE");
+        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO");
         return response;
     }
 
-    // Handles instant MESSAGE (RFC 3428) with @SipFrom injection
+    // Handles instant MESSAGE (RFC 3428) with @SipFrom and @SipDtmf injection
     @OnMessage
     public Mono<SipResponse> onMessage(SipRequest request,
                                        @SipFrom String from,
-                                       @SipBody String messageBody) {
+                                       @SipBody String messageBody,
+                                       @SipDtmf DtmfSignal dtmf) {
+        if (dtmf != null) {
+            LOG.info("Received DTMF via MESSAGE from {}: digit='{}'", from, dtmf.getDigit());
+        }
+        return Mono.just(SipResponse.ok(request));
+    }
+
+    // Handles mid-dialog INFO (RFC 2976 / RFC 6086) DTMF relay signaling
+    @OnInfo
+    public Mono<SipResponse> onInfo(SipRequest request,
+                                    @SipCallId String callId,
+                                    @SipFrom String from,
+                                    @SipDtmf DtmfSignal dtmf,
+                                    SipSession session) {
+        if (dtmf != null) {
+            LOG.info("Received DTMF tone '{}' (duration: {}ms) for call {}",
+                    dtmf.getDigit(), dtmf.getDuration(), callId);
+            if (session != null) {
+                String existing = session.getAttribute("dtmfDigits");
+                session.setAttribute("dtmfDigits", (existing != null ? existing : "") + dtmf.getDigit());
+            }
+            SipResponse ok = SipResponse.ok(request);
+            ok.getHeaders().set("X-Received-DTMF", String.valueOf(dtmf.getDigit()));
+            return Mono.just(ok);
+        }
         return Mono.just(SipResponse.ok(request));
     }
 }

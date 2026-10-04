@@ -249,6 +249,27 @@ public class SipRequest extends SipMessage {
             return this;
         }
 
+        public Builder dtmf(net.pilgrim.sip.dtmf.DtmfSignal signal) {
+            return dtmf(signal, SipHeaders.APPLICATION_DTMF_RELAY);
+        }
+
+        public Builder dtmf(net.pilgrim.sip.dtmf.DtmfSignal signal, String contentType) {
+            this.request.setDtmf(signal, contentType);
+            return this;
+        }
+
+        public Builder dtmf(char digit) {
+            return dtmf(net.pilgrim.sip.dtmf.DtmfSignal.of(digit));
+        }
+
+        public Builder dtmf(char digit, int durationMs) {
+            return dtmf(net.pilgrim.sip.dtmf.DtmfSignal.of(digit, durationMs));
+        }
+
+        public Builder dtmfRelay(char digit, int durationMs) {
+            return dtmf(net.pilgrim.sip.dtmf.DtmfSignal.of(digit, durationMs), SipHeaders.APPLICATION_DTMF_RELAY);
+        }
+
         public SipRequest build() {
             // Fill defaults if missing
             if (this.request.getCallId() == null) {

@@ -162,6 +162,24 @@ public class SipRoute {
                     if (args[i] == null && required) {
                         throw new IllegalArgumentException("Missing required SIP body");
                     }
+                } else if (arg.isAnnotationPresent(SipDtmf.class)) {
+                    AnnotationValue<SipDtmf> dtmfAnn = arg.getAnnotation(SipDtmf.class);
+                    boolean required = dtmfAnn != null && dtmfAnn.booleanValue("required").orElse(false);
+                    java.util.Optional<net.pilgrim.sip.dtmf.DtmfSignal> dtmfOpt = request.getDtmfSignal();
+                    if (dtmfOpt.isEmpty() && required) {
+                        throw new IllegalArgumentException("Missing required DTMF signal in SIP " + request.getMethodName());
+                    }
+                    if (net.pilgrim.sip.dtmf.DtmfSignal.class.isAssignableFrom(paramType)) {
+                        args[i] = dtmfOpt.orElse(null);
+                    } else if (paramType == char.class || paramType == Character.class) {
+                        args[i] = dtmfOpt.map(net.pilgrim.sip.dtmf.DtmfSignal::getDigit).orElse('\0');
+                    } else if (String.class.isAssignableFrom(paramType)) {
+                        args[i] = dtmfOpt.map(s -> String.valueOf(s.getDigit())).orElse(null);
+                    } else {
+                        args[i] = dtmfOpt.orElse(null);
+                    }
+                } else if (net.pilgrim.sip.dtmf.DtmfSignal.class.isAssignableFrom(paramType)) {
+                    args[i] = request.getDtmfSignal().orElse(null);
                 } else if (String.class.isAssignableFrom(paramType)) {
                     // If unannotated String, check if parameter name corresponds to a header
                     String headerVal = request.getHeaders().get(arg.getName());
@@ -246,6 +264,24 @@ public class SipRoute {
                     if (args[i] == null && bodyAnn.required()) {
                         throw new IllegalArgumentException("Missing required SIP body");
                     }
+                } else if (param.isAnnotationPresent(SipDtmf.class)) {
+                    SipDtmf dtmfAnn = param.getAnnotation(SipDtmf.class);
+                    boolean required = dtmfAnn != null && dtmfAnn.required();
+                    java.util.Optional<net.pilgrim.sip.dtmf.DtmfSignal> dtmfOpt = request.getDtmfSignal();
+                    if (dtmfOpt.isEmpty() && required) {
+                        throw new IllegalArgumentException("Missing required DTMF signal in SIP " + request.getMethodName());
+                    }
+                    if (net.pilgrim.sip.dtmf.DtmfSignal.class.isAssignableFrom(paramType)) {
+                        args[i] = dtmfOpt.orElse(null);
+                    } else if (paramType == char.class || paramType == Character.class) {
+                        args[i] = dtmfOpt.map(net.pilgrim.sip.dtmf.DtmfSignal::getDigit).orElse('\0');
+                    } else if (String.class.isAssignableFrom(paramType)) {
+                        args[i] = dtmfOpt.map(s -> String.valueOf(s.getDigit())).orElse(null);
+                    } else {
+                        args[i] = dtmfOpt.orElse(null);
+                    }
+                } else if (net.pilgrim.sip.dtmf.DtmfSignal.class.isAssignableFrom(paramType)) {
+                    args[i] = request.getDtmfSignal().orElse(null);
                 } else if (String.class.isAssignableFrom(paramType)) {
                     String headerVal = request.getHeaders().get(param.getName());
                     args[i] = headerVal;
