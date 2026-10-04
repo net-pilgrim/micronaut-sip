@@ -33,6 +33,15 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
     public static final String RETRY_AFTER = "Retry-After";
     public static final String INFO_PACKAGE = "Info-Package"; // RFC 6086
     public static final String RECV_INFO = "Recv-Info";       // RFC 6086
+    public static final String EVENT = "Event";               // RFC 6665
+    public static final String ALLOW_EVENTS = "Allow-Events"; // RFC 6665
+    public static final String SUBSCRIPTION_STATE = "Subscription-State"; // RFC 6665
+    public static final String REFER_TO = "Refer-To";         // RFC 3515
+    public static final String REFERRED_BY = "Referred-By";   // RFC 3892
+    public static final String RSEQ = "RSeq";                 // RFC 3262
+    public static final String RACK = "RAck";                 // RFC 3262
+    public static final String SIP_ETAG = "SIP-ETag";         // RFC 3903
+    public static final String SIP_IF_MATCH = "SIP-If-Match"; // RFC 3903
 
     // Common standard MIME content types for DTMF
     public static final String APPLICATION_DTMF_RELAY = "application/dtmf-relay"; // RFC 2976 / RFC 6086
@@ -66,6 +75,15 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
         registerCanonical(RETRY_AFTER);
         registerCanonical(INFO_PACKAGE);
         registerCanonical(RECV_INFO);
+        registerCanonical(EVENT);
+        registerCanonical(ALLOW_EVENTS);
+        registerCanonical(SUBSCRIPTION_STATE);
+        registerCanonical(REFER_TO);
+        registerCanonical(REFERRED_BY);
+        registerCanonical(RSEQ);
+        registerCanonical(RACK);
+        registerCanonical(SIP_ETAG);
+        registerCanonical(SIP_IF_MATCH);
 
         // Compact forms as defined in RFC 3261 Section 7.3.3
         COMPACT_TO_CANONICAL.put("v", VIA);

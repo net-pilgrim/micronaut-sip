@@ -27,6 +27,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.*;
@@ -37,6 +38,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Dispatches incoming SIP requests to annotated @SipController handlers reactively using ExecutableMethod.
@@ -51,6 +53,29 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
     private static final Logger LOG = LoggerFactory.getLogger(SipDispatcher.class);
 
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("replaces", "100rel");
+
+    private record MethodMapping<A extends Annotation>(
+            Class<A> annotationClass,
+            SipMethod method,
+            Function<A, String> pathExtractor
+    ) {}
+
+    private static final List<MethodMapping<?>> METHOD_MAPPINGS = List.of(
+            new MethodMapping<>(OnInvite.class, SipMethod.INVITE, OnInvite::value),
+            new MethodMapping<>(OnAck.class, SipMethod.ACK, OnAck::value),
+            new MethodMapping<>(OnBye.class, SipMethod.BYE, OnBye::value),
+            new MethodMapping<>(OnCancel.class, SipMethod.CANCEL, OnCancel::value),
+            new MethodMapping<>(OnOptions.class, SipMethod.OPTIONS, OnOptions::value),
+            new MethodMapping<>(OnRegister.class, SipMethod.REGISTER, OnRegister::value),
+            new MethodMapping<>(OnMessage.class, SipMethod.MESSAGE, OnMessage::value),
+            new MethodMapping<>(OnInfo.class, SipMethod.INFO, OnInfo::value),
+            new MethodMapping<>(OnPrack.class, SipMethod.PRACK, OnPrack::value),
+            new MethodMapping<>(OnSubscribe.class, SipMethod.SUBSCRIBE, OnSubscribe::value),
+            new MethodMapping<>(OnNotify.class, SipMethod.NOTIFY, OnNotify::value),
+            new MethodMapping<>(OnRefer.class, SipMethod.REFER, OnRefer::value),
+            new MethodMapping<>(OnUpdate.class, SipMethod.UPDATE, OnUpdate::value),
+            new MethodMapping<>(OnPublish.class, SipMethod.PUBLISH, OnPublish::value)
+    );
 
     private final BeanContext beanContext;
     private final SipSessionManager sessionManager;
@@ -215,30 +240,12 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
 
         // Direct check or fallback if path was not mapped via AliasFor or OnSipMethod directly
         if (path.isEmpty()) {
-            if (method.hasAnnotation(OnInvite.class)) {
-                sipMethod = SipMethod.INVITE;
-                path = method.stringValue(OnInvite.class).orElse("");
-            } else if (method.hasAnnotation(OnBye.class)) {
-                sipMethod = SipMethod.BYE;
-                path = method.stringValue(OnBye.class).orElse("");
-            } else if (method.hasAnnotation(OnAck.class)) {
-                sipMethod = SipMethod.ACK;
-                path = method.stringValue(OnAck.class).orElse("");
-            } else if (method.hasAnnotation(OnCancel.class)) {
-                sipMethod = SipMethod.CANCEL;
-                path = method.stringValue(OnCancel.class).orElse("");
-            } else if (method.hasAnnotation(OnRegister.class)) {
-                sipMethod = SipMethod.REGISTER;
-                path = method.stringValue(OnRegister.class).orElse("");
-            } else if (method.hasAnnotation(OnOptions.class)) {
-                sipMethod = SipMethod.OPTIONS;
-                path = method.stringValue(OnOptions.class).orElse("");
-            } else if (method.hasAnnotation(OnMessage.class)) {
-                sipMethod = SipMethod.MESSAGE;
-                path = method.stringValue(OnMessage.class).orElse("");
-            } else if (method.hasAnnotation(OnInfo.class)) {
-                sipMethod = SipMethod.INFO;
-                path = method.stringValue(OnInfo.class).orElse("");
+            for (MethodMapping<?> mapping : METHOD_MAPPINGS) {
+                if (method.hasAnnotation(mapping.annotationClass())) {
+                    sipMethod = mapping.method();
+                    path = method.stringValue(mapping.annotationClass()).orElse("");
+                    break;
+                }
             }
         }
 
@@ -291,44 +298,34 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                 errorRoutes.add(errorRoute);
                 LOG.info("Registered fallback SIP error handler for {}: {}.{}()", exType.getSimpleName(),
                         clazz.getSimpleName(), method.getName());
-            } else if (method.isAnnotationPresent(OnInvite.class)) {
-                OnInvite ann = method.getAnnotation(OnInvite.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.INVITE, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnBye.class)) {
-                OnBye ann = method.getAnnotation(OnBye.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.BYE, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnAck.class)) {
-                OnAck ann = method.getAnnotation(OnAck.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.ACK, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnCancel.class)) {
-                OnCancel ann = method.getAnnotation(OnCancel.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.CANCEL, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnRegister.class)) {
-                OnRegister ann = method.getAnnotation(OnRegister.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.REGISTER, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnOptions.class)) {
-                OnOptions ann = method.getAnnotation(OnOptions.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.OPTIONS, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnMessage.class)) {
-                OnMessage ann = method.getAnnotation(OnMessage.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.MESSAGE, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnInfo.class)) {
-                OnInfo ann = method.getAnnotation(OnInfo.class);
-                String pattern = combinePattern(prefix, ann.value());
-                addRoute(new SipRoute(SipMethod.INFO, null, pattern, controller, method));
-            } else if (method.isAnnotationPresent(OnSipMethod.class)) {
+                continue;
+            }
+
+            if (method.isAnnotationPresent(OnSipMethod.class)) {
                 OnSipMethod ann = method.getAnnotation(OnSipMethod.class);
                 String pattern = combinePattern(prefix, ann.path());
                 addRoute(new SipRoute(ann.value(), ann.custom(), pattern, controller, method));
+                continue;
+            }
+
+            for (MethodMapping<?> mapping : METHOD_MAPPINGS) {
+                if (registerRouteIfPresent(method, mapping, controller, prefix)) {
+                    break;
+                }
             }
         }
+    }
+
+    private <A extends Annotation> boolean registerRouteIfPresent(
+            Method method, MethodMapping<A> mapping, Object controller, String prefix) {
+        A ann = method.getAnnotation(mapping.annotationClass());
+        if (ann == null) {
+            return false;
+        }
+        String path = mapping.pathExtractor().apply(ann);
+        String pattern = combinePattern(prefix, path);
+        addRoute(new SipRoute(mapping.method(), null, pattern, controller, method));
+        return true;
     }
 
     private synchronized void addRoute(SipRoute newRoute) {
@@ -760,7 +757,10 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
         if (result instanceof SipResponse response) {
             responseSender.accept(response);
             sink.complete();
-        } else if (result instanceof Publisher<?> publisher) {
+            return;
+        }
+
+        if (result instanceof Publisher<?> publisher) {
             Disposable sub = Flux.from(publisher).subscribe(
                     item -> {
                         if (item instanceof SipResponse r) {
@@ -786,7 +786,10 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
             if (activeTx != null) {
                 activeTx.addDisposable(sub);
             }
-        } else if (result instanceof CompletionStage<?> stage) {
+            return;
+        }
+
+        if (result instanceof CompletionStage<?> stage) {
             stage.whenComplete((item, error) -> {
                 if (timer != null) timer.dispose();
                 if (error != null) {
@@ -805,11 +808,12 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                     sink.complete();
                 }
             });
-        } else {
-            if (timer != null) timer.dispose();
-            LOG.warn("Unrecognized return type from SIP handler: {}", result.getClass().getName());
-            sink.complete();
+            return;
         }
+
+        if (timer != null) timer.dispose();
+        LOG.warn("Unrecognized return type from SIP handler: {}", result.getClass().getName());
+        sink.complete();
     }
 
     private void handleDispatchError(Throwable error, SipRequest request, Consumer<SipResponse> responseSender) {

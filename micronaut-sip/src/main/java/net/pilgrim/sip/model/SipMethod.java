@@ -19,7 +19,8 @@ public enum SipMethod {
     SUBSCRIBE, // RFC 6665
     NOTIFY,    // RFC 6665
     REFER,     // RFC 3515
-    UPDATE;    // RFC 3311
+    UPDATE,    // RFC 3311
+    PUBLISH;   // RFC 3903
 
     public static SipMethod from(String methodName) {
         if (methodName == null) {

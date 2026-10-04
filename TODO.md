@@ -4,10 +4,10 @@ This backlog is based on current implementation gaps visible in `micronaut-sip`,
 
 ## 1) Low-hanging fruits (high value, small scope)
 
-1. **Add first-class annotations for already-modeled SIP methods (`PRACK`, `SUBSCRIBE`, `NOTIFY`, `REFER`, `UPDATE`)**
+1. ~~**Add first-class annotations for already-modeled SIP methods (`PRACK`, `SUBSCRIBE`, `NOTIFY`, `REFER`, `UPDATE`)**~~ [DONE]
    - **Why:** `SipMethod` already includes these methods, but only `INVITE/BYE/ACK/CANCEL/REGISTER/OPTIONS/MESSAGE/INFO` have dedicated annotations.
    - **Where:** `micronaut-sip/src/main/java/net/pilgrim/sip/model/SipMethod.java`, `.../annotation/On*.java`, `.../router/SipDispatcher.java`.
-   - **Done when:** New `@OnPrack`, `@OnSubscribe`, `@OnNotify`, `@OnRefer`, `@OnUpdate` annotations exist and routes auto-register exactly like existing ones.
+   - **Done when:** New `@OnPrack`, `@OnSubscribe`, `@OnNotify`, `@OnRefer`, `@OnUpdate` (and `@OnPublish`) annotations exist and routes auto-register cleanly without nested if-else ladders.
 
 2. **Improve transport behavior for `TLS/WS/WSS` in client/server**
    - **Why:** Transport enum and parser recognize `TLS/WS/WSS`, but request sending only has explicit branches for UDP/TCP.

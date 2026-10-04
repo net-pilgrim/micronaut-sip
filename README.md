@@ -48,6 +48,12 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
    - `@OnOptions`: Handles SIP `OPTIONS` requests.
    - `@OnMessage`: Handles SIP `MESSAGE` instant messaging (RFC 3428).
    - `@OnInfo`: Handles SIP `INFO` requests for mid-dialog signaling and DTMF relay (RFC 2976 / RFC 6086).
+   - `@OnPrack`: Handles SIP `PRACK` provisional response acknowledgements (RFC 3262).
+   - `@OnSubscribe`: Handles SIP `SUBSCRIBE` event subscriptions (RFC 6665).
+   - `@OnNotify`: Handles SIP `NOTIFY` event notifications (RFC 6665).
+   - `@OnRefer`: Handles SIP `REFER` call transfer / event requests (RFC 3515).
+   - `@OnUpdate`: Handles SIP `UPDATE` session modifications (RFC 3311).
+   - `@OnPublish`: Handles SIP `PUBLISH` event state publications (RFC 3903).
    - `@OnSipMethod`: Generic handler for arbitrary SIP methods.
    - `@SipCallId`: Injects `Call-ID` directly into method parameters.
    - `@SipFrom`: Injects `From` header string or parsed `SipUri`.
