@@ -7,13 +7,18 @@ import net.pilgrim.sip.rtp.codec.G711UlawCodec;
 import net.pilgrim.sip.rtp.codec.RtpCodec;
 import net.pilgrim.sip.rtp.transport.RtpInboundPacket;
 import net.pilgrim.sip.rtp.transport.RtpOutboundPacket;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -21,6 +26,8 @@ import java.util.concurrent.atomic.LongAdder;
  * Manages the active bidirectional media stream for a single call session.
  */
 public final class RtpMediaSession implements Closeable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RtpMediaSession.class);
 
     private final String callId;
     private final int localPort;
@@ -32,6 +39,9 @@ public final class RtpMediaSession implements Closeable {
 
     private volatile InetSocketAddress remoteAddress;
     private volatile RtpCodec codec;
+
+    private final List<AudioProcessor> inboundProcessors = new CopyOnWriteArrayList<>();
+    private final List<AudioProcessor> outboundProcessors = new CopyOnWriteArrayList<>();
 
     private final LongAdder packetsSent = new LongAdder();
     private final LongAdder packetsReceived = new LongAdder();
@@ -95,11 +105,76 @@ public final class RtpMediaSession implements Closeable {
         return incomingSink.asFlux().map(RtpInboundPacket::packet);
     }
 
+    /**
+     * Emits a reactive stream of decoded audio frames (PCM-16LE) for this media session.
+     */
+    public Flux<AudioFrame> incomingAudioFrames() {
+        return incomingPackets().map(inbound -> {
+            byte[] pcm = codec.decodeToPcm16Le(inbound.packet().getPayload());
+            return new AudioFrame(callId, pcm, codec.clockRate(), 1,
+                    inbound.packet().getTimestamp(), inbound.packet().getSequenceNumber(),
+                    AudioFrame.Direction.INBOUND);
+        });
+    }
+
+    public void addAudioProcessor(AudioProcessor processor) {
+        addInboundProcessor(processor);
+    }
+
+    public void addInboundProcessor(AudioProcessor processor) {
+        if (processor != null) {
+            inboundProcessors.add(processor);
+        }
+    }
+
+    public void addOutboundProcessor(AudioProcessor processor) {
+        if (processor != null) {
+            outboundProcessors.add(processor);
+        }
+    }
+
+    public void removeAudioProcessor(AudioProcessor processor) {
+        if (processor != null) {
+            inboundProcessors.remove(processor);
+            outboundProcessors.remove(processor);
+        }
+    }
+
+    public void clearAudioProcessors() {
+        inboundProcessors.clear();
+        outboundProcessors.clear();
+    }
+
+    public List<AudioProcessor> getInboundProcessors() {
+        return Collections.unmodifiableList(inboundProcessors);
+    }
+
+    public List<AudioProcessor> getOutboundProcessors() {
+        return Collections.unmodifiableList(outboundProcessors);
+    }
+
     public void onInboundPacket(RtpInboundPacket inbound) {
         packetsReceived.increment();
         bytesReceived.add(inbound.packet().getPayload().length + 12);
         if (remoteAddress == null) {
             this.remoteAddress = inbound.senderAddress();
+        }
+        if (!inboundProcessors.isEmpty()) {
+            try {
+                byte[] pcm = codec.decodeToPcm16Le(inbound.packet().getPayload());
+                AudioFrame frame = new AudioFrame(callId, pcm, codec.clockRate(), 1,
+                        inbound.packet().getTimestamp(), inbound.packet().getSequenceNumber(),
+                        AudioFrame.Direction.INBOUND);
+                for (AudioProcessor processor : inboundProcessors) {
+                    try {
+                        processor.process(frame);
+                    } catch (Throwable t) {
+                        LOG.warn("AudioProcessor error on inbound Call-ID: {}", callId, t);
+                    }
+                }
+            } catch (Exception e) {
+                LOG.warn("Failed to decode inbound audio for processor on Call-ID: {}", callId, e);
+            }
         }
         incomingSink.tryEmitNext(inbound);
     }
@@ -133,6 +208,18 @@ public final class RtpMediaSession implements Closeable {
 
     public Mono<Void> sendAudioFrame(byte[] pcm16Le, boolean marker) {
         Objects.requireNonNull(pcm16Le, "pcm16Le");
+        if (!outboundProcessors.isEmpty()) {
+            AudioFrame frame = new AudioFrame(callId, pcm16Le, codec.clockRate(), 1,
+                    packetizer.getCurrentTimestamp(), packetizer.getCurrentSequenceNumber(),
+                    AudioFrame.Direction.OUTBOUND);
+            for (AudioProcessor processor : outboundProcessors) {
+                try {
+                    processor.process(frame);
+                } catch (Throwable t) {
+                    LOG.warn("AudioProcessor error on outbound Call-ID: {}", callId, t);
+                }
+            }
+        }
         byte[] encoded = codec.encodePcm16Le(pcm16Le);
         int sampleCount = pcm16Le.length / 2;
         return sendEncodedFrame(encoded, sampleCount, marker);

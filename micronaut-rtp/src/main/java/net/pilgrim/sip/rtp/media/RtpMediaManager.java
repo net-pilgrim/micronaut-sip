@@ -18,18 +18,23 @@ import net.pilgrim.sip.rtp.codec.RtpCodecRegistry;
 import net.pilgrim.sip.rtp.config.RtpConfiguration;
 import net.pilgrim.sip.rtp.transport.RtpDatagramCodec;
 import net.pilgrim.sip.rtp.transport.RtpInboundPacket;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Sinks;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * Top-level media manager coordinating high-concurrency RTP sessions.
@@ -38,12 +43,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Singleton
 public class RtpMediaManager implements Closeable {
 
+    private static final Logger LOG = LoggerFactory.getLogger(RtpMediaManager.class);
+
     private final RtpConfiguration configuration;
     private final MediaPortManager portManager;
     private final EventLoopGroup workerGroup;
     private final boolean ownsWorkerGroup;
     private final RtpCodecRegistry codecRegistry;
     private final ConcurrentMap<String, RtpMediaSession> sessions = new ConcurrentHashMap<>();
+    private final List<Consumer<RtpMediaSession>> sessionInitializers = new CopyOnWriteArrayList<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public RtpMediaManager() {
@@ -145,6 +153,13 @@ public class RtpMediaManager implements Closeable {
                     codec,
                     remoteAddress
             );
+            for (Consumer<RtpMediaSession> initializer : sessionInitializers) {
+                try {
+                    initializer.accept(session);
+                } catch (Throwable t) {
+                    LOG.warn("Session initializer failed for Call-ID: {}", callId, t);
+                }
+            }
             sessions.put(callId, session);
             return session;
         } catch (InterruptedException e) {
@@ -196,6 +211,28 @@ public class RtpMediaManager implements Closeable {
 
     public RtpConfiguration getConfiguration() {
         return configuration;
+    }
+
+    public void addSessionInitializer(Consumer<RtpMediaSession> initializer) {
+        if (initializer != null) {
+            sessionInitializers.add(initializer);
+        }
+    }
+
+    public void addAudioProcessor(AudioProcessor processor) {
+        if (processor != null) {
+            addSessionInitializer(session -> session.addAudioProcessor(processor));
+        }
+    }
+
+    public void removeSessionInitializer(Consumer<RtpMediaSession> initializer) {
+        if (initializer != null) {
+            sessionInitializers.remove(initializer);
+        }
+    }
+
+    public void clearSessionInitializers() {
+        sessionInitializers.clear();
     }
 
     @Override

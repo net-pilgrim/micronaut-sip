@@ -52,6 +52,14 @@ public final class RtpPacketizer {
         return ssrc;
     }
 
+    public int getCurrentSequenceNumber() {
+        return sequenceNumber.get();
+    }
+
+    public long getCurrentTimestamp() {
+        return timestamp.get();
+    }
+
     public RtpPacket packetize(byte[] encodedPayload, int sampleCount, boolean marker) {
         Objects.requireNonNull(encodedPayload, "encodedPayload");
         if (sampleCount <= 0) {
