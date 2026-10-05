@@ -22,11 +22,13 @@ public class AnnouncementPlayer {
     private static final Logger LOG = LoggerFactory.getLogger(AnnouncementPlayer.class);
     private static final int BYTES_PER_20MS_FRAME = 320; // 160 samples * 2 bytes/sample @ 8 kHz
 
-    private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "netann-rtp-player");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
+            Math.max(4, Runtime.getRuntime().availableProcessors()),
+            r -> {
+                Thread t = new Thread(r, "netann-rtp-player");
+                t.setDaemon(true);
+                return t;
+            });
 
     private final RtpMediaSession mediaSession;
     private final byte[] audioData;
@@ -127,7 +129,10 @@ public class AnnouncementPlayer {
             currentOffset += frameLen;
 
             try {
-                mediaSession.sendAudioFrame(frame, isFirstPacket).block(Duration.ofMillis(50));
+                mediaSession.sendAudioFrame(frame, isFirstPacket).subscribe(
+                        null,
+                        e -> LOG.warn("Failed sending RTP audio frame for Call-ID: {}: {}", mediaSession.getCallId(), e.getMessage())
+                );
                 isFirstPacket = false;
             } catch (Exception e) {
                 LOG.warn("Failed sending RTP audio frame for Call-ID: {}: {}", mediaSession.getCallId(), e.getMessage());

@@ -92,7 +92,7 @@ public class AnnouncementAudioLoader {
 
         // 1. Built-in synthetic tones (useful for tests and synthetic prompts)
         if (uri.startsWith("builtin:") || uri.startsWith("tone:")) {
-            String spec = uri.substring(uri.indexOf(':') + 1);
+            String spec = uri.substring(uri.lastIndexOf(':') + 1);
             int freq = 440;
             int durMs = 1000;
             if (!spec.isBlank()) {
