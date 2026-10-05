@@ -295,4 +295,12 @@ public class SipNettyServer {
     public SipEncoder getEncoder() {
         return encoder;
     }
+
+    public SipServerConfiguration getConfiguration() {
+        return configuration;
+    }
+
+    public String getAdvertisedIp() {
+        return configuration.resolveAdvertisedIp();
+    }
 }

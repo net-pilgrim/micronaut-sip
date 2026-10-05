@@ -878,4 +878,28 @@ class SipIntegrationTest {
         assertNotNull(resp2);
         assertEquals(200, resp2.getStatusCode(), "Server must replay cached response for retransmitted REGISTER per Timer J");
     }
+
+    @Test
+    void testContactHeaderUsesServerListeningPortNotCallerEphemeralPort() {
+        int serverPort = server.getPort();
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", serverPort);
+        String callId = "contact-port-test-" + UUID.randomUUID();
+
+        SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:alice@127.0.0.1:" + serverPort)
+                .from("<sip:caller@127.0.0.1:49999>;tag=call-cport")
+                .to("<sip:alice@127.0.0.1>")
+                .contact("<sip:caller@127.0.0.1:49999>")
+                .callId(callId)
+                .build();
+
+        SipResponse ringing = client.send(invite, serverAddress).block(Duration.ofSeconds(3));
+        assertNotNull(ringing);
+        String contact = ringing.getContact();
+        assertNotNull(contact);
+
+        assertTrue(contact.contains(":" + serverPort),
+                "Contact header must advertise server's listening port " + serverPort + ", got: " + contact);
+        assertFalse(contact.contains(":49999"),
+                "Contact header must not use caller's ephemeral port 49999: " + contact);
+    }
 }

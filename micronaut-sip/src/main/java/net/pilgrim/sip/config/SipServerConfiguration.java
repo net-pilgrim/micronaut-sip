@@ -12,6 +12,7 @@ public class SipServerConfiguration {
     private String udpHost = "0.0.0.0";
     private String tcpHost = "0.0.0.0";
     private int udpPort = 5060;
+    private String advertisedIp;
     private boolean enabled = true;
     private boolean udpEnabled = true;
     private boolean tcpEnabled = true;
@@ -68,6 +69,47 @@ public class SipServerConfiguration {
     @Property(name = "sip.server.udp.host")
     public void setUdpNestedHost(String udpHost) {
         this.udpHost = udpHost;
+    }
+
+    public String getAdvertisedIp() {
+        return advertisedIp;
+    }
+
+    public void setAdvertisedIp(String advertisedIp) {
+        this.advertisedIp = advertisedIp;
+    }
+
+    @Property(name = "sip.server.advertised-ip")
+    public void setAdvertisedNestedIp(String advertisedIp) {
+        this.advertisedIp = advertisedIp;
+    }
+
+    /**
+     * Resolves the IP address to advertise in SIP Contact and SDP c=/o= lines.
+     * Hierarchy:
+     * 1. Explicitly configured sip.server.advertised-ip (or SIP_SERVER_ADVERTISED_IP env).
+     * 2. sip.server.udp.host if not "0.0.0.0".
+     * 3. sip.server.tcp.host if not "0.0.0.0".
+     * 4. Auto-detected host IP (if not loopback/any-local).
+     * 5. "127.0.0.1" fallback.
+     */
+    public String resolveAdvertisedIp() {
+        if (advertisedIp != null && !advertisedIp.isBlank()) {
+            return advertisedIp.trim();
+        }
+        if (udpHost != null && !udpHost.isBlank() && !"0.0.0.0".equals(udpHost)) {
+            return udpHost.trim();
+        }
+        if (tcpHost != null && !tcpHost.isBlank() && !"0.0.0.0".equals(tcpHost)) {
+            return tcpHost.trim();
+        }
+        try {
+            java.net.InetAddress localHost = java.net.InetAddress.getLocalHost();
+            if (localHost != null && !localHost.isLoopbackAddress() && !localHost.isAnyLocalAddress()) {
+                return localHost.getHostAddress();
+            }
+        } catch (Exception ignored) {}
+        return "127.0.0.1";
     }
 
     public String getTcpHost() {

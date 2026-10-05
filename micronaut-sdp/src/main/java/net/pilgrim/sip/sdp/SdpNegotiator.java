@@ -33,6 +33,16 @@ public final class SdpNegotiator {
                 ));
     }
 
+    public SdpNegotiator(String localAddress) {
+        this(localAddress, 49170, "MicronautSIP", "Call", "RTP/AVP",
+                List.of("0", "8"),
+                Map.of(
+                        "0", "PCMU/8000",
+                        "8", "PCMA/8000",
+                        "96", "opus/48000/2"
+                ));
+    }
+
     public SdpNegotiator(String localAddress,
                          int localAudioPort,
                          String originUsername,
@@ -51,16 +61,24 @@ public final class SdpNegotiator {
         this.defaultRtpMaps = defaultRtpMaps == null ? Map.of() : new LinkedHashMap<>(defaultRtpMaps);
     }
 
+    public String getLocalAddress() {
+        return localAddress;
+    }
+
     public SdpMessage parse(String sdpText) {
         return parser.parse(sdpText);
     }
 
     public String createOffer() {
-        return createOffer(this.localAudioPort);
+        return createOffer(this.localAudioPort, this.localAddress);
     }
 
     public String createOffer(int localPort) {
-        SdpMessage offer = createBaseLocalMessage();
+        return createOffer(localPort, this.localAddress);
+    }
+
+    public String createOffer(int localPort, String localAddress) {
+        SdpMessage offer = createBaseLocalMessage(localAddress);
         SdpMessage.MediaDescription media = new SdpMessage.MediaDescription(
                 "audio",
                 localPort > 0 ? localPort : localAudioPort,
@@ -79,26 +97,37 @@ public final class SdpNegotiator {
     }
 
     public String createAnswer(String offerSdp) {
-        return createAnswer(parse(offerSdp), this.localAudioPort);
+        return createAnswer(parse(offerSdp), this.localAudioPort, this.localAddress);
     }
 
     public String createAnswer(String offerSdp, int localPort) {
-        return createAnswer(parse(offerSdp), localPort);
+        return createAnswer(parse(offerSdp), localPort, this.localAddress);
+    }
+
+    public String createAnswer(String offerSdp, int localPort, String localAddress) {
+        if (offerSdp == null || offerSdp.isBlank()) {
+            return createOffer(localPort, localAddress);
+        }
+        return createAnswer(parse(offerSdp), localPort, localAddress);
     }
 
     public String createAnswer(SdpMessage offer) {
-        return createAnswer(offer, this.localAudioPort);
+        return createAnswer(offer, this.localAudioPort, this.localAddress);
     }
 
     public String createAnswer(SdpMessage offer, int localPort) {
+        return createAnswer(offer, localPort, this.localAddress);
+    }
+
+    public String createAnswer(SdpMessage offer, int localPort, String localAddress) {
         if (offer == null) {
-            return createOffer(localPort);
+            return createOffer(localPort, localAddress);
         }
 
-        SdpMessage answer = createBaseLocalMessage();
+        SdpMessage answer = createBaseLocalMessage(localAddress);
         SdpMessage.MediaDescription offeredAudio = offer.findFirstAudioMedia();
         if (offeredAudio == null) {
-            return createOffer(localPort);
+            return createOffer(localPort, localAddress);
         }
 
         List<String> acceptedPayloads = negotiatePayloadTypes(offeredAudio.getFormats());
@@ -129,12 +158,13 @@ public final class SdpNegotiator {
         return answer.toSdpString();
     }
 
-    private SdpMessage createBaseLocalMessage() {
+    private SdpMessage createBaseLocalMessage(String addr) {
+        String effectiveAddress = (addr == null || addr.isBlank()) ? this.localAddress : addr.trim();
         SdpMessage message = new SdpMessage();
         message.setVersion("0");
-        message.setOrigin(originUsername + " 2890844526 2890844526 IN IP4 " + localAddress);
+        message.setOrigin(originUsername + " 2890844526 2890844526 IN IP4 " + effectiveAddress);
         message.setSessionName(sessionName);
-        message.setConnection("IN IP4 " + localAddress);
+        message.setConnection("IN IP4 " + effectiveAddress);
         message.setTiming("0 0");
         return message;
     }

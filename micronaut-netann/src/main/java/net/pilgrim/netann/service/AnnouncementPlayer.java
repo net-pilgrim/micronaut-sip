@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -16,7 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Streams PCM-16LE audio data over an active RtpMediaSession at 20ms intervals (50 packets/second),
- * enforcing RFC 4240 repeat, delay, and duration parameters.
+ * enforcing RFC 4240 repeat, delay, and duration parameters along with local security duration caps.
  */
 public class AnnouncementPlayer {
 
@@ -32,6 +31,9 @@ public class AnnouncementPlayer {
     private final RtpMediaSession mediaSession;
     private final byte[] audioData;
     private final AnnouncementParams params;
+    private final long maxDurationCapMs;
+    private final long effectiveDurationMs;
+    private final int maxRepeatCount;
     private final Runnable onComplete;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -48,10 +50,27 @@ public class AnnouncementPlayer {
                               byte[] audioData,
                               AnnouncementParams params,
                               Runnable onComplete) {
+        this(mediaSession, audioData, params, 300_000L, 100, onComplete);
+    }
+
+    public AnnouncementPlayer(RtpMediaSession mediaSession,
+                              byte[] audioData,
+                              AnnouncementParams params,
+                              long maxDurationCapMs,
+                              int maxRepeatCount,
+                              Runnable onComplete) {
         this.mediaSession = Objects.requireNonNull(mediaSession, "mediaSession");
         this.audioData = (audioData != null) ? audioData : new byte[0];
         this.params = (params != null) ? params : new AnnouncementParams(null, 1, 0, 0, null, null);
+        this.maxDurationCapMs = maxDurationCapMs > 0 ? maxDurationCapMs : 300_000L;
+        this.maxRepeatCount = maxRepeatCount > 0 ? maxRepeatCount : 100;
         this.onComplete = onComplete;
+
+        if (this.params.getDurationMs() > 0) {
+            this.effectiveDurationMs = Math.min(this.params.getDurationMs(), this.maxDurationCapMs);
+        } else {
+            this.effectiveDurationMs = this.maxDurationCapMs;
+        }
     }
 
     public synchronized void start() {
@@ -71,8 +90,8 @@ public class AnnouncementPlayer {
             return;
         }
 
-        LOG.info("Starting announcement playback for Call-ID: {} (length: {} bytes, params: {})",
-                mediaSession.getCallId(), audioData.length, params);
+        LOG.info("Starting announcement playback for Call-ID: {} (length: {} bytes, effectiveDuration: {}ms, params: {})",
+                mediaSession.getCallId(), audioData.length, effectiveDurationMs, params);
 
         this.scheduledFuture = SCHEDULER.scheduleAtFixedRate(this::tick, 0, 20, TimeUnit.MILLISECONDS);
     }
@@ -86,9 +105,9 @@ public class AnnouncementPlayer {
         long now = System.currentTimeMillis();
 
         // 1. Check max duration cap
-        if (params.getDurationMs() > 0 && (now - startTimestamp) >= params.getDurationMs()) {
-            LOG.info("Max duration reached ({}ms) for Call-ID: {}. Terminating playback.",
-                    params.getDurationMs(), mediaSession.getCallId());
+        if (effectiveDurationMs > 0 && (now - startTimestamp) >= effectiveDurationMs) {
+            LOG.info("Effective duration limit reached ({}ms) for Call-ID: {}. Terminating playback.",
+                    effectiveDurationMs, mediaSession.getCallId());
             triggerComplete();
             return;
         }
@@ -118,15 +137,17 @@ public class AnnouncementPlayer {
         // 4. Check if current repeat finished
         if (currentOffset >= audioData.length) {
             currentRepeat++;
-            if (params.isRepeatForever() || currentRepeat < params.getRepeat()) {
+            boolean shouldRepeat = (params.isRepeatForever() && currentRepeat < maxRepeatCount)
+                    || (!params.isRepeatForever() && currentRepeat < params.getRepeat());
+            if (shouldRepeat) {
                 currentOffset = 0;
                 isFirstPacket = true;
                 if (params.getDelayMs() > 0) {
                     delayUntil = System.currentTimeMillis() + params.getDelayMs();
                 }
             } else {
-                LOG.info("Announcement finished all {} repetitions for Call-ID: {}",
-                        currentRepeat, mediaSession.getCallId());
+                LOG.info("Announcement finished all {} repetitions (cap={}) for Call-ID: {}",
+                        currentRepeat, maxRepeatCount, mediaSession.getCallId());
                 triggerComplete();
             }
         }
@@ -159,5 +180,9 @@ public class AnnouncementPlayer {
 
     public boolean isCompleted() {
         return completed.get();
+    }
+
+    public long getEffectiveDurationMs() {
+        return effectiveDurationMs;
     }
 }

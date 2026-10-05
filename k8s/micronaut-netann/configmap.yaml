@@ -20,13 +20,25 @@ data:
     sip.server.tcp-enabled=true
     sip.server.tcp.host=0.0.0.0
     sip.server.tcp.port=5060
-    
+
+    # Advertised IP (Downward API status.hostIP)
+    sip.server.advertised-ip=${SIP_SERVER_ADVERTISED_IP:}
+
     # NetAnn Service Identifier & Limits
     sip.server.enabled=true
     sip.server.server-name=Micronaut-NetAnn/1.0
     sip.server.request-timeout-ms=5000
     sip.server.auto-cancel-enabled=true
     sip.server.trying-delay-ms=200
+
+    # NetAnn Audio & Security Controls (RFC 4240)
+    netann.audio.http-enabled=false
+    netann.audio.ssrf-protection-enabled=true
+    netann.audio.max-audio-size-bytes=10485760
+    netann.call.max-duration-seconds=300
+    netann.call.max-active-announcements=500
+    netann.call.max-announcements-per-ip=20
+    netann.call.max-repeat-count=100
     
     # Token-Bucket Rate Limiting (RFC 3261 §21.5.4)
     sip.server.rate-limit.enabled=true

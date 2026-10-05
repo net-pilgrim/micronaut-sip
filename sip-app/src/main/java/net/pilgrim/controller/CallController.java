@@ -1,6 +1,9 @@
 package net.pilgrim.controller;
 
+import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
+import net.pilgrim.sip.config.SipServerConfiguration;
+import net.pilgrim.sip.model.SipTransport;
 import net.pilgrim.sip.rtp.RtpPacketizer;
 import net.pilgrim.sip.rtp.RtpStreamSender;
 import net.pilgrim.sip.rtp.codec.RtpCodec;
@@ -17,6 +20,7 @@ import net.pilgrim.sip.sdp.SdpMessage;
 import net.pilgrim.sip.sdp.SdpNegotiator;
 import net.pilgrim.sip.sdp.SdpParser;
 import net.pilgrim.sip.session.SipSession;
+import net.pilgrim.sip.transport.SipNettyServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -45,14 +49,53 @@ public class CallController {
     private static final RtpCodecRegistry RTP_CODECS = RtpCodecRegistry.withG711Defaults();
 
     private final RtpMediaManager rtpMediaManager;
+    private final SipNettyServer sipServer;
+    private final SipServerConfiguration serverConfig;
 
     public CallController() {
-        this(new RtpMediaManager());
+        this(new RtpMediaManager(), null, null);
+    }
+
+    public CallController(RtpMediaManager rtpMediaManager) {
+        this(rtpMediaManager, null, null);
     }
 
     @Inject
-    public CallController(RtpMediaManager rtpMediaManager) {
+    public CallController(RtpMediaManager rtpMediaManager,
+                          @Nullable SipNettyServer sipServer,
+                          @Nullable SipServerConfiguration serverConfig) {
         this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+        this.sipServer = sipServer;
+        this.serverConfig = serverConfig != null ? serverConfig
+                : (sipServer != null ? sipServer.getConfiguration() : new SipServerConfiguration());
+    }
+
+    public String resolveAdvertisedIp() {
+        if (serverConfig != null) {
+            return serverConfig.resolveAdvertisedIp();
+        }
+        if (sipServer != null) {
+            return sipServer.getAdvertisedIp();
+        }
+        return "127.0.0.1";
+    }
+
+    public int resolveServerPort(SipRequest request) {
+        boolean isTcp = request != null && request.getTransport() == SipTransport.TCP;
+        if (isTcp) {
+            return sipServer != null ? sipServer.getTcpPort()
+                    : (serverConfig != null ? serverConfig.getTcpPort() : 5060);
+        } else {
+            return sipServer != null ? sipServer.getUdpPort()
+                    : (serverConfig != null ? serverConfig.getUdpPort() : 5060);
+        }
+    }
+
+    public String buildContactUri(SipRequest request) {
+        String advertisedIp = resolveAdvertisedIp();
+        int serverPort = resolveServerPort(request);
+        boolean isTcp = request != null && request.getTransport() == SipTransport.TCP;
+        return "<sip:" + advertisedIp + ":" + serverPort + (isTcp ? ";transport=tcp" : "") + ">";
     }
 
     public RtpMediaManager getRtpMediaManager() {
@@ -87,8 +130,8 @@ public class CallController {
 
         // 180 Ringing provisional response
         SipResponse ringing = SipResponse.ringing(request);
-        int contactPort = (request.getRemoteAddress() != null) ? request.getRemoteAddress().getPort() : 5060;
-        String contactUri = "<sip:127.0.0.1:" + contactPort + ">";
+        String advertisedIp = resolveAdvertisedIp();
+        String contactUri = buildContactUri(request);
 
         boolean require100rel = request.getHeaders().containsToken(SipHeaders.REQUIRE, "100rel");
         boolean supported100rel = request.getHeaders().containsToken(SipHeaders.SUPPORTED, "100rel");
@@ -111,12 +154,12 @@ public class CallController {
         // 200 OK carries SDP answer for early-offer INVITE and SDP offer for late-offer INVITE.
         SipResponse ok;
         if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort);
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
             session.setAttribute("sdpAnswer", answer);
             ok = SipResponse.ok(request, answer, "application/sdp");
         } else {
             session.setAttribute("awaitingAckSdpAnswer", true);
-            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort);
+            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
             session.setAttribute("localSdpOffer", localOffer);
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
@@ -171,18 +214,21 @@ public class CallController {
             LOG.warn("Failed to allocate dynamic Netty RTP port for slow Call-ID: {}", callId, e);
         }
 
+        String advertisedIp = resolveAdvertisedIp();
+        String contactUri = buildContactUri(request);
+
         SipResponse ok;
         if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort);
+            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
             session.setAttribute("sdpAnswer", answer);
             ok = SipResponse.ok(request, answer, "application/sdp");
         } else {
             session.setAttribute("awaitingAckSdpAnswer", true);
-            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort);
+            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
             session.setAttribute("localSdpOffer", localOffer);
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
-        ok.getHeaders().setContact("<sip:127.0.0.1:" + request.getRemoteAddress().getPort() + ">");
+        ok.getHeaders().setContact(contactUri);
         return Mono.just(ok).delayElement(Duration.ofMillis(350));
     }
 

@@ -302,9 +302,11 @@ sequenceDiagram
 
 ---
 
-### Call Flow 5: Continuous Loop (`repeat=forever`)
+### Call Flow 5: Continuous Loop (`repeat=forever`) & Local Resource Capping
 
-When `repeat=forever` is declared, the announcement loops indefinitely until the caller explicitly terminates the call:
+RFC 4240 §3.2 specifies that `repeat=forever` loops an announcement continuously, but explicitly notes: *"Media server implementations often enforce a maximum duration or repetition count to prevent resource exhaustion."*
+
+Micronaut NetAnn enforces a local maximum duration ceiling (`netann.call.max-duration-seconds`, default: 300 seconds / 5 minutes) and a maximum repetition limit (`netann.call.max-repeat-count`, default: 100) to protect RTP ports and system memory against abandoned or malicious calls. When this cap is reached, the server self-terminates playback and hangs up with `BYE`.
 
 ```mermaid
 sequenceDiagram
@@ -316,13 +318,14 @@ sequenceDiagram
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
-    loop Indefinitely until Caller Hangs Up
+    loop Capped by netann.call.max-duration-seconds (e.g. 300s)
         Server->>Client: RTP Audio Stream
         Server->>Client: RTP Silence (500ms)
     end
     
-    Client->>Server: BYE
-    Server-->>Client: 200 OK
+    Note over Server: Duration cap reached (300s)
+    Server->>Client: BYE sip:caller@... SIP/2.0
+    Client-->>Server: 200 OK
 ```
 
 ---
@@ -390,6 +393,32 @@ Via: SIP/2.0/UDP 127.0.0.1:5062;branch=z9hG4bK-inv-488
 
 SIP/2.0 488 Not Acceptable Here
 Reason: Unsupported NetAnn service
+Content-Length: 0
+```
+
+#### 4. SSRF & Prompt Security Violation (`403 Forbidden`)
+If a caller specifies an HTTP(S) URL targeting private or metadata IP ranges (e.g. `127.0.0.1`, `10.0.0.0/8`, `169.254.169.254`), or attempts path traversal (`..`):
+
+```http
+INVITE sip:annc@ms.example.net:5060;play=http://169.254.169.254/latest/meta-data SIP/2.0
+Via: SIP/2.0/UDP 192.0.2.1:5062;branch=z9hG4bK-inv-ssrf
+...
+
+SIP/2.0 403 Forbidden
+Reason: Forbidden: SSRF blocked: host '169.254.169.254' resolves to restricted address: 169.254.169.254
+Content-Length: 0
+```
+
+#### 5. Concurrency & Per-IP Schedular Saturation (`503 Service Unavailable`)
+If total active calls exceed `netann.call.max-active-announcements` or a single client IP exceeds `netann.call.max-announcements-per-ip`:
+
+```http
+INVITE sip:annc@ms.example.net:5060;play=builtin:tone:440,1000 SIP/2.0
+Via: SIP/2.0/UDP 192.0.2.1:5062;branch=z9hG4bK-inv-overload
+...
+
+SIP/2.0 503 Service Unavailable
+Retry-After: 10
 Content-Length: 0
 ```
 
@@ -467,12 +496,42 @@ Binary location:
 
 The application includes production-ready manifests in [`k8s/micronaut-netann/`](k8s/micronaut-netann/):
 
-- **Deployment**: Configured with liveness (`:8080/health/liveness`), readiness (`:8080/health/readiness`), startup probes, non-root security context, and resource boundaries.
-- **Service**: Exposes port `5060/UDP`, `5060/TCP`, and `8080/TCP` with `sessionAffinity: ClientIP`.
-- **ConfigMap**: Configurable server names, rate limits, audio port bounds, and prompt locations.
-- **Prompt Volume**: Mounted storage volume for provisioning custom corporate audio announcements.
+- **Deployment**: Configured with `hostNetwork: true` and `dnsPolicy: ClusterFirstWithHostNet` for direct high-throughput dynamic RTP port streaming (`10000–20000`), Downward API injection for `SIP_SERVER_ADVERTISED_IP`, liveness (`:8080/health/liveness`), readiness (`:8080/health/readiness`), startup probes, non-root security context, and resource boundaries.
+- **Service**: Exposes port `5060/UDP`, `5060/TCP`, `8080/TCP`, and representative RTP UDP media ports (`10000..10010`) with `sessionAffinity: ClientIP`.
+- **ConfigMap**: Configurable server names, rate limits, audio port bounds, NetAnn security caps, and prompt locations.
+- **Prompt Volume**: Mounted storage volume (`/var/netann/prompts`) for provisioning custom audio announcements.
 
 To deploy via Kustomize:
 ```bash
 kubectl apply -k k8s/
 ```
+
+---
+
+## 6. Security Controls & Non-Blocking Reactive Architecture
+
+Production media servers face severe vulnerabilities if prompts or call durations are unconstrained. `micronaut-netann` implements multi-layer defense-in-depth:
+
+### 1. SSRF Guardrails (`AnnouncementAudioLoader`)
+- **Disabled by Default**: HTTP(S) prompt loading is disabled by default (`netann.audio.http-enabled=false`).
+- **Host Allowlisting**: When enabled, optional `netann.audio.allowed-hosts` restricts remote fetching to designated internal/partner CDNs.
+- **DNS Pre-Resolution IP Inspection**: URLs are pre-resolved and inspected before connection initiation. Connections to loopback (`127.0.0.0/8`, `::1`), private networks (RFC 1918: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`), and cloud metadata (`169.254.169.254`) are blocked and return `403 Forbidden`.
+- **Redirects Disabled**: `HttpURLConnection.setInstanceFollowRedirects(false)` prevents attackers from using open redirects to bypass SSRF validation.
+- **Connect & Read Timeouts**: Enforces 3s connect and 5s read timeouts.
+- **Memory Exhaustion Guard**: Streams are bounded to `netann.audio.max-audio-size-bytes` (default: 10 MB); oversized files throw an exception before memory exhaustion.
+- **Filesystem Jail & Traversal**: Paths containing `..` or residing outside the configured prompt directory are rejected with `SecurityException`.
+
+### 2. Duration & Repeat Caps (`AnnouncementPlayer`)
+- **Indefinite Hold Prevention**: Calls omitting `duration` or setting `repeat=forever` are capped at `netann.call.max-duration-seconds` (default: 300 seconds / 5 minutes) and `netann.call.max-repeat-count` (default: 100). Callers cannot monopolize RTP ports indefinitely.
+- **Auto-Teardown**: Upon reaching the duration ceiling or repeating count, the server automatically hangs up with an in-dialog `BYE`.
+
+### 3. Concurrency & Per-IP Protection (`AnnouncementController`)
+- **Total Concurrency Cap**: `netann.call.max-active-announcements` (default: 500) prevents media server CPU exhaustion.
+- **Per-IP Limiter**: `netann.call.max-announcements-per-ip` (default: 20) prevents a single client from monopolizing announcement resources. Excess calls receive `503 Service Unavailable` with `Retry-After: 10`.
+
+### 4. Non-Blocking Event-Loop Dispatch
+- Disk I/O, WAV decoding, and HTTP downloads are offloaded from Netty event loop threads via Project Reactor's `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())`. Netty I/O threads remain free to process incoming SIP datagrams with sub-millisecond responsiveness.
+
+### 5. Advertised IP & Server Port Resolution
+- **Contact Header**: Advertises the server's listening port (`server.getPort()`), NOT the client's ephemeral source port.
+- **Routable Host**: In Kubernetes or NAT environments, resolves `sip.server.advertised-ip` (injected via Downward API `status.hostIP`) for `Contact` headers, SDP connection (`c=IN IP4 ...`) and origin (`o=...`) lines, and `BYE` `Via` headers.

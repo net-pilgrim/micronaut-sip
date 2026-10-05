@@ -1,7 +1,8 @@
 package net.pilgrim.netann.controller;
 
+import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
-import jakarta.inject.Singleton;
+import net.pilgrim.netann.config.NetannConfiguration;
 import net.pilgrim.netann.model.AnnouncementParams;
 import net.pilgrim.netann.service.AnnouncementAudioLoader;
 import net.pilgrim.netann.service.AnnouncementPlayer;
@@ -18,6 +19,7 @@ import net.pilgrim.sip.transport.SipNettyServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.FileNotFoundException;
 import java.net.InetSocketAddress;
@@ -25,6 +27,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Implements RFC 4240 Basic Network Media Services with SIP: Announcement Service (annc).
@@ -41,20 +45,26 @@ public class AnnouncementController {
     private final AnnouncementAudioLoader audioLoader;
     private final SipNettyServer sipServer;
     private final SipSessionManager sessionManager;
+    private final NetannConfiguration config;
     private final SdpNegotiator sdpNegotiator = new SdpNegotiator();
     private final SdpParser sdpParser = new SdpParser();
 
     private final Map<String, AnnouncementPlayer> activePlayers = new ConcurrentHashMap<>();
+    private final Map<String, String> callIdToClientIp = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, AtomicInteger> activeCallsPerIp = new ConcurrentHashMap<>();
 
     @Inject
     public AnnouncementController(RtpMediaManager rtpMediaManager,
                                   AnnouncementAudioLoader audioLoader,
                                   SipNettyServer sipServer,
-                                  SipSessionManager sessionManager) {
+                                  SipSessionManager sessionManager,
+                                  @Nullable NetannConfiguration config) {
         this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
         this.audioLoader = audioLoader != null ? audioLoader : new AnnouncementAudioLoader();
         this.sipServer = sipServer;
         this.sessionManager = sessionManager;
+        this.config = config != null ? config
+                : (this.audioLoader.getConfiguration() != null ? this.audioLoader.getConfiguration() : new NetannConfiguration());
     }
 
     /**
@@ -67,58 +77,100 @@ public class AnnouncementController {
                                                   SipSession session) {
         LOG.info("Received RFC 4240 annc INVITE for Call-ID: {} (URI: {})", callId, request.getUri());
 
+        // 0. Check concurrency limits (total active & per-IP)
+        if (activePlayers.size() >= config.getMaxActiveAnnouncements()) {
+            LOG.warn("Max active announcements limit reached ({}), rejecting Call-ID: {}",
+                    config.getMaxActiveAnnouncements(), callId);
+            SipResponse overloaded = request.createResponse(503, "Service Unavailable");
+            overloaded.getHeaders().set("Retry-After", "10");
+            return Mono.just(overloaded);
+        }
+
+        String clientIp = (request.getRemoteAddress() != null && request.getRemoteAddress().getAddress() != null)
+                ? request.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1";
+
+        AtomicInteger ipCounter = activeCallsPerIp.computeIfAbsent(clientIp, k -> new AtomicInteger(0));
+        if (ipCounter.incrementAndGet() > config.getMaxAnnouncementsPerIp()) {
+            ipCounter.decrementAndGet();
+            LOG.warn("Max announcements per IP limit reached for {} ({}), rejecting Call-ID: {}",
+                    clientIp, config.getMaxAnnouncementsPerIp(), callId);
+            SipResponse overloaded = request.createResponse(503, "Service Unavailable");
+            overloaded.getHeaders().set("Retry-After", "10");
+            return Mono.just(overloaded);
+        }
+        callIdToClientIp.put(callId, clientIp);
+
         // 1. Parse announcement parameters from Request-URI
         AnnouncementParams params;
         try {
             params = AnnouncementParams.parse(request.getUri());
         } catch (IllegalArgumentException e) {
+            releaseClientIp(callId);
             LOG.warn("Failed parsing annc URI parameters for Call-ID: {}: {}", callId, e.getMessage());
             return Mono.just(request.createResponse(SipStatus.BAD_REQUEST, e.getMessage()));
         }
 
         // 2. Validate mandatory play= parameter per RFC 4240 §3
         if (params.getPlay() == null || params.getPlay().isBlank()) {
+            releaseClientIp(callId);
             LOG.warn("Missing mandatory play= parameter for Call-ID: {}", callId);
             return Mono.just(request.createResponse(SipStatus.BAD_REQUEST, "Mandatory play parameter missing"));
         }
 
-        // 3. Load and decode audio prompt
-        byte[] pcmAudio;
-        try {
-            pcmAudio = audioLoader.loadAudio(params.getPlay());
-        } catch (FileNotFoundException e) {
-            LOG.warn("Announcement content not found for '{}' (Call-ID: {})", params.getPlay(), callId);
-            return Mono.just(request.createResponse(SipStatus.NOT_FOUND, "Announcement content not found"));
-        } catch (Exception e) {
-            LOG.warn("Announcement content could not be retrieved for '{}' (Call-ID: {}): {}",
-                    params.getPlay(), callId, e.getMessage());
-            return Mono.just(request.createResponse(SipStatus.BAD_REQUEST, "Announcement content could not be retrieved"));
-        }
+        // 3. Load and decode audio prompt asynchronously off Netty event loop
+        return Mono.fromCallable(() -> audioLoader.loadAudio(params.getPlay()))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(pcmAudio -> {
+                    // 4. Create RTP media session
+                    int localAudioPort = 49170;
+                    try {
+                        RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
+                        localAudioPort = mediaSession.getLocalPort();
+                    } catch (Exception e) {
+                        LOG.warn("Failed creating RTP media session for Call-ID: {}", callId, e);
+                    }
 
-        // 4. Create RTP media session
-        int localAudioPort = 49170;
-        try {
-            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception e) {
-            LOG.warn("Failed creating RTP media session for Call-ID: {}", callId, e);
-        }
+                    // 5. Generate SDP Answer (or local offer if late-offer INVITE) with advertised IP
+                    String advertisedIp = resolveAdvertisedIp();
+                    String sdpAnswer = (sdpOffer != null && !sdpOffer.isBlank())
+                            ? sdpNegotiator.createAnswer(sdpOffer, localAudioPort, advertisedIp)
+                            : sdpNegotiator.createOffer(localAudioPort, advertisedIp);
 
-        // 5. Generate SDP Answer
-        String sdpAnswer = sdpNegotiator.createAnswer(sdpOffer != null ? sdpOffer : "", localAudioPort);
+                    session.setState(SipSession.State.EARLY);
+                    session.setAttribute("anncParams", params);
+                    session.setAttribute("pcmAudio", pcmAudio);
+                    session.setAttribute("sdpOffer", sdpOffer);
+                    session.setAttribute("originalInvite", request);
 
-        session.setState(SipSession.State.EARLY);
-        session.setAttribute("anncParams", params);
-        session.setAttribute("pcmAudio", pcmAudio);
-        session.setAttribute("sdpOffer", sdpOffer);
-        session.setAttribute("originalInvite", request);
+                    int serverPort = (request.getTransport() == SipTransport.TCP)
+                            ? (sipServer != null ? sipServer.getTcpPort() : 5060)
+                            : (sipServer != null ? sipServer.getUdpPort() : 5060);
 
-        int contactPort = (request.getRemoteAddress() != null) ? request.getRemoteAddress().getPort() : 5060;
-        SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
-        ok.getHeaders().setContact("<sip:annc@127.0.0.1:" + contactPort + ">");
-        session.setAttribute("originalOk", ok);
+                    SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
+                    String contactUri = "<sip:annc@" + advertisedIp + ":" + serverPort
+                            + (request.getTransport() == SipTransport.TCP ? ";transport=tcp" : "") + ">";
+                    ok.getHeaders().setContact(contactUri);
+                    session.setAttribute("originalOk", ok);
 
-        return Mono.just(ok);
+                    return Mono.just(ok);
+                })
+                .onErrorResume(FileNotFoundException.class, e -> {
+                    releaseClientIp(callId);
+                    LOG.warn("Announcement content not found for '{}' (Call-ID: {})", params.getPlay(), callId);
+                    return Mono.just(request.createResponse(SipStatus.NOT_FOUND, "Announcement content not found"));
+                })
+                .onErrorResume(SecurityException.class, e -> {
+                    releaseClientIp(callId);
+                    LOG.warn("Security violation for announcement '{}' (Call-ID: {}): {}",
+                            params.getPlay(), callId, e.getMessage());
+                    return Mono.just(request.createResponse(SipStatus.FORBIDDEN, "Forbidden: " + e.getMessage()));
+                })
+                .onErrorResume(Exception.class, e -> {
+                    releaseClientIp(callId);
+                    LOG.warn("Announcement content could not be retrieved for '{}' (Call-ID: {}): {}",
+                            params.getPlay(), callId, e.getMessage());
+                    return Mono.just(request.createResponse(SipStatus.BAD_REQUEST, "Announcement content could not be retrieved"));
+                });
     }
 
     /**
@@ -180,11 +232,13 @@ public class AnnouncementController {
             return;
         }
 
-        // Create and start RTP audio player
+        // Create and start RTP audio player with configured duration and repeat limits
         AnnouncementPlayer player = new AnnouncementPlayer(
                 mediaSession,
                 pcmAudio,
                 params,
+                config.getMaxDurationSeconds() * 1000L,
+                config.getMaxRepeatCount(),
                 () -> {
                     LOG.info("Announcement finished for Call-ID: {}. Terminating call with BYE.", callId);
                     terminateAndSendBye(callId, session, originalInvite, originalOk);
@@ -229,7 +283,18 @@ public class AnnouncementController {
         return response;
     }
 
+    private void releaseClientIp(String callId) {
+        String clientIp = callIdToClientIp.remove(callId);
+        if (clientIp != null) {
+            AtomicInteger counter = activeCallsPerIp.get(clientIp);
+            if (counter != null && counter.decrementAndGet() <= 0) {
+                activeCallsPerIp.remove(clientIp, counter);
+            }
+        }
+    }
+
     private void cleanupCall(String callId, SipSession session) {
+        releaseClientIp(callId);
         AnnouncementPlayer player = activePlayers.remove(callId);
         if (player != null) {
             player.stop();
@@ -274,7 +339,7 @@ public class AnnouncementController {
             bye.getHeaders().setMaxForwards(70);
             bye.getHeaders().setContentLength(0);
 
-            String host = "127.0.0.1";
+            String host = resolveAdvertisedIp();
             int port = (originalInvite.getTransport() == SipTransport.TCP) ? sipServer.getTcpPort() : sipServer.getUdpPort();
             String proto = (originalInvite.getTransport() == SipTransport.TCP) ? "TCP" : "UDP";
             String branch = "z9hG4bK-bye-" + UUID.randomUUID().toString().substring(0, 8);
@@ -285,6 +350,13 @@ public class AnnouncementController {
         } catch (Exception e) {
             LOG.warn("Failed sending BYE for completed announcement Call-ID: {}: {}", callId, e.getMessage(), e);
         }
+    }
+
+    private String resolveAdvertisedIp() {
+        if (sipServer != null && sipServer.getConfiguration() != null) {
+            return sipServer.getConfiguration().resolveAdvertisedIp();
+        }
+        return "127.0.0.1";
     }
 
     private Optional<String> parseConnectionHost(String connectionLine) {
@@ -300,5 +372,10 @@ public class AnnouncementController {
 
     public Map<String, AnnouncementPlayer> getActivePlayers() {
         return activePlayers;
+    }
+
+    public int getActiveCountForIp(String ip) {
+        AtomicInteger count = activeCallsPerIp.get(ip);
+        return count != null ? count.get() : 0;
     }
 }

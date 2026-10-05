@@ -83,4 +83,21 @@ class SdpNegotiatorTest {
         SdpMessage parsedAnswer = parser.parse(answer);
         assertEquals(10502, parsedAnswer.findFirstAudioMedia().getPort());
     }
+
+    @Test
+    void createsOfferAndAnswerWithCustomAdvertisedIp() {
+        String customIp = "198.51.100.25";
+        String offer = negotiator.createOffer(10500, customIp);
+        assertTrue(offer.contains("c=IN IP4 198.51.100.25"));
+        assertTrue(offer.contains("o=MicronautSIP 2890844526 2890844526 IN IP4 198.51.100.25"));
+
+        String answer = negotiator.createAnswer(offer, 10502, customIp);
+        assertTrue(answer.contains("c=IN IP4 198.51.100.25"));
+        assertTrue(answer.contains("o=MicronautSIP 2890844526 2890844526 IN IP4 198.51.100.25"));
+
+        SdpNegotiator customNegotiator = new SdpNegotiator(customIp);
+        assertEquals(customIp, customNegotiator.getLocalAddress());
+        String defaultOffer = customNegotiator.createOffer();
+        assertTrue(defaultOffer.contains("c=IN IP4 198.51.100.25"));
+    }
 }

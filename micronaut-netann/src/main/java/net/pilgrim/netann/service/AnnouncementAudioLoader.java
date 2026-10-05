@@ -1,6 +1,9 @@
 package net.pilgrim.netann.service;
 
+import io.micronaut.core.annotation.Nullable;
+import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
+import net.pilgrim.netann.config.NetannConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -8,15 +11,20 @@ import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLConnection;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -24,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Loads and decodes announcement audio prompts from various URL schemes
  * (classpath:, file:, http:, https:, /provisioned/, or builtin tones)
  * into standard 8000 Hz, 16-bit mono, signed PCM-16LE samples for RTP streaming.
+ * Includes security controls against SSRF, memory exhaustion, and path traversal.
  */
 @Singleton
 public class AnnouncementAudioLoader {
@@ -40,12 +49,23 @@ public class AnnouncementAudioLoader {
             false    // little-endian
     );
 
+    private final NetannConfiguration config;
     private final Map<String, byte[]> provisionedPrompts = new ConcurrentHashMap<>();
 
     public AnnouncementAudioLoader() {
+        this(new NetannConfiguration());
+    }
+
+    @Inject
+    public AnnouncementAudioLoader(@Nullable NetannConfiguration config) {
+        this.config = config != null ? config : new NetannConfiguration();
         // Register default built-in tones
         provisionedPrompts.put("welcome", generateTone(440, 1000));
         provisionedPrompts.put("busy", generateTone(480, 500));
+    }
+
+    public NetannConfiguration getConfiguration() {
+        return config;
     }
 
     public void registerProvisioned(String id, byte[] pcm16LeAudio) {
@@ -60,7 +80,8 @@ public class AnnouncementAudioLoader {
      * @param playUri URI specified in the RFC 4240 play= parameter
      * @return raw PCM-16LE audio bytes
      * @throws FileNotFoundException if the prompt cannot be found
-     * @throws IOException           if retrieval or audio decoding fails
+     * @throws SecurityException     if the prompt URI violates SSRF, jail, or permission policies
+     * @throws IOException           if retrieval, size cap, or audio decoding fails
      */
     public byte[] loadAudio(String playUri) throws FileNotFoundException, IOException {
         if (playUri == null || playUri.isBlank()) {
@@ -98,7 +119,7 @@ public class AnnouncementAudioLoader {
             InputStream cpIn = getClass().getResourceAsStream("/prompts/" + id + ".wav");
             if (cpIn != null) {
                 try (cpIn) {
-                    return decodeWavOrPcm(cpIn.readAllBytes());
+                    return decodeWavOrPcm(readBoundedStream(cpIn, config.getMaxAudioSizeBytes()));
                 }
             }
             throw new FileNotFoundException("Provisioned announcement not found: " + id);
@@ -123,32 +144,19 @@ public class AnnouncementAudioLoader {
                 throw new FileNotFoundException("Classpath announcement resource not found: " + resourcePath);
             }
             try (in) {
-                return decodeWavOrPcm(in.readAllBytes());
+                return decodeWavOrPcm(readBoundedStream(in, config.getMaxAudioSizeBytes()));
             }
         }
 
         // 4. File URL or direct local filesystem path
         if (uri.startsWith("file://") || uri.startsWith("/") || (uri.length() > 2 && uri.charAt(1) == ':')) {
             String pathStr = uri.startsWith("file://") ? uri.substring(7) : uri;
-            Path path = Path.of(pathStr);
-            if (!Files.exists(path)) {
-                throw new FileNotFoundException("Announcement file not found: " + pathStr);
-            }
-            return decodeWavOrPcm(Files.readAllBytes(path));
+            return loadFileAudio(pathStr);
         }
 
         // 5. HTTP / HTTPS URL
         if (uri.startsWith("http://") || uri.startsWith("https://")) {
-            try {
-                URL url = URI.create(uri).toURL();
-                try (InputStream in = url.openStream()) {
-                    return decodeWavOrPcm(in.readAllBytes());
-                }
-            } catch (FileNotFoundException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new IOException("Failed retrieving HTTP announcement from " + uri + ": " + e.getMessage(), e);
-            }
+            return loadHttpAudio(uri);
         }
 
         // 6. Check provisioned prompt by raw name or try loading as classpath resource
@@ -159,11 +167,195 @@ public class AnnouncementAudioLoader {
         InputStream directIn = getClass().getResourceAsStream("/" + uri);
         if (directIn != null) {
             try (directIn) {
-                return decodeWavOrPcm(directIn.readAllBytes());
+                return decodeWavOrPcm(readBoundedStream(directIn, config.getMaxAudioSizeBytes()));
             }
         }
 
         throw new FileNotFoundException("Announcement resource not found: " + uri);
+    }
+
+    private byte[] loadHttpAudio(String uriStr) throws FileNotFoundException, IOException {
+        URI uri = URI.create(uriStr);
+        validateHttpUrl(uri);
+
+        URL url = uri.toURL();
+        URLConnection rawConn = url.openConnection();
+        if (!(rawConn instanceof HttpURLConnection httpConn)) {
+            throw new SecurityException("Unsupported connection protocol for " + uriStr);
+        }
+
+        httpConn.setConnectTimeout(config.getHttpConnectTimeoutMs());
+        httpConn.setReadTimeout(config.getHttpReadTimeoutMs());
+        httpConn.setInstanceFollowRedirects(false);
+        httpConn.setRequestProperty("User-Agent", "Micronaut-NetAnn/1.0");
+
+        int status = httpConn.getResponseCode();
+        if (status == HttpURLConnection.HTTP_NOT_FOUND) {
+            throw new FileNotFoundException("Remote audio prompt not found: " + uriStr);
+        }
+        if (status < 200 || status >= 300) {
+            throw new IOException("Remote audio server returned HTTP " + status + " for " + uriStr);
+        }
+
+        long contentLength = httpConn.getContentLengthLong();
+        if (contentLength > config.getMaxAudioSizeBytes()) {
+            throw new IOException("Remote audio prompt size (" + contentLength + " bytes) exceeds maximum configured limit ("
+                    + config.getMaxAudioSizeBytes() + " bytes)");
+        }
+
+        try (InputStream in = httpConn.getInputStream()) {
+            byte[] data = readBoundedStream(in, config.getMaxAudioSizeBytes());
+            return decodeWavOrPcm(data);
+        }
+    }
+
+    private void validateHttpUrl(URI uri) throws SecurityException {
+        if (!config.isHttpEnabled()) {
+            throw new SecurityException("HTTP audio prompt fetching is disabled by configuration");
+        }
+
+        String scheme = uri.getScheme();
+        if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+            throw new SecurityException("Unsupported audio URI scheme: " + scheme);
+        }
+
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) {
+            throw new SecurityException("Missing host in HTTP audio URL: " + uri);
+        }
+
+        // Host allowlist check (if configured)
+        if (!config.getAllowedHosts().isEmpty()) {
+            boolean allowed = false;
+            String lowerHost = host.toLowerCase(Locale.ROOT);
+            for (String allowedHost : config.getAllowedHosts()) {
+                String lowerAllowed = allowedHost.trim().toLowerCase(Locale.ROOT);
+                if (lowerHost.equals(lowerAllowed) || lowerHost.endsWith("." + lowerAllowed)) {
+                    allowed = true;
+                    break;
+                }
+            }
+            if (!allowed) {
+                throw new SecurityException("Host '" + host + "' is not permitted by allowed-hosts configuration");
+            }
+        }
+
+        // SSRF protection: DNS resolution and private/loopback/metadata IP blocking
+        if (config.isSsrfProtectionEnabled()) {
+            try {
+                InetAddress[] addresses = InetAddress.getAllByName(host);
+                for (InetAddress addr : addresses) {
+                    if (isRestrictedIp(addr)) {
+                        throw new SecurityException("SSRF blocked: host '" + host + "' resolves to restricted address: " + addr.getHostAddress());
+                    }
+                }
+            } catch (java.net.UnknownHostException e) {
+                throw new SecurityException("Cannot resolve host '" + host + "': " + e.getMessage(), e);
+            }
+        }
+    }
+
+    private boolean isRestrictedIp(InetAddress addr) {
+        if (addr.isLoopbackAddress() || addr.isAnyLocalAddress() || addr.isLinkLocalAddress()
+                || addr.isSiteLocalAddress() || addr.isMulticastAddress()) {
+            return true;
+        }
+
+        byte[] raw = addr.getAddress();
+        if (raw.length == 4) {
+            int b0 = raw[0] & 0xFF;
+            int b1 = raw[1] & 0xFF;
+
+            // 0.0.0.0/8 (Current network)
+            if (b0 == 0) return true;
+            // 127.0.0.0/8 (Loopback)
+            if (b0 == 127) return true;
+            // 10.0.0.0/8 (Private RFC 1918)
+            if (b0 == 10) return true;
+            // 172.16.0.0/12 (Private RFC 1918)
+            if (b0 == 172 && (b1 >= 16 && b1 <= 31)) return true;
+            // 192.168.0.0/16 (Private RFC 1918)
+            if (b0 == 192 && b1 == 168) return true;
+            // 169.254.0.0/16 (Link-local & cloud metadata)
+            if (b0 == 169 && b1 == 254) return true;
+            // 100.64.0.0/10 (Shared address space / Carrier-grade NAT)
+            if (b0 == 100 && (b1 >= 64 && b1 <= 127)) return true;
+            // Broadcast 255.255.255.255
+            if (b0 == 255) return true;
+        } else if (raw.length == 16) {
+            // IPv6 ::1 loopback
+            boolean allZeroExceptLast = true;
+            for (int i = 0; i < 15; i++) {
+                if (raw[i] != 0) { allZeroExceptLast = false; break; }
+            }
+            if (allZeroExceptLast && raw[15] == 1) return true;
+
+            // Unique local fc00::/7 (0xfc or 0xfd)
+            int b0 = raw[0] & 0xFF;
+            if ((b0 & 0xFE) == 0xFC) return true;
+
+            // Link-local fe80::/10
+            int b1 = raw[1] & 0xFF;
+            if (b0 == 0xFE && (b1 & 0xC0) == 0x80) return true;
+
+            // IPv4-mapped IPv6 (::ffff:x.x.x.x)
+            if (raw[0] == 0 && raw[1] == 0 && raw[2] == 0 && raw[3] == 0
+                    && raw[4] == 0 && raw[5] == 0 && raw[6] == 0 && raw[7] == 0
+                    && raw[8] == 0 && raw[9] == 0 && (raw[10] & 0xFF) == 0xFF && (raw[11] & 0xFF) == 0xFF) {
+                byte[] v4 = new byte[]{raw[12], raw[13], raw[14], raw[15]};
+                try {
+                    return isRestrictedIp(InetAddress.getByAddress(v4));
+                } catch (Exception ignored) {}
+            }
+        }
+        return false;
+    }
+
+    private byte[] loadFileAudio(String pathStr) throws FileNotFoundException, IOException {
+        if (pathStr.contains("..")) {
+            throw new SecurityException("Path traversal ('..') is not permitted: " + pathStr);
+        }
+
+        Path path = Path.of(pathStr).normalize();
+        if (!Files.exists(path)) {
+            throw new FileNotFoundException("Announcement file not found: " + pathStr);
+        }
+
+        // Jail check: if promptDirectory is configured and exists, restrict paths outside
+        String jailDir = config.getPromptDirectory();
+        if (jailDir != null && !jailDir.isBlank()) {
+            Path jailPath = Path.of(jailDir).toAbsolutePath().normalize();
+            if (Files.exists(jailPath)) {
+                Path absPath = path.toAbsolutePath().normalize();
+                if (!absPath.startsWith(jailPath)) {
+                    throw new SecurityException("File path '" + pathStr + "' is outside allowed prompt directory '" + jailDir + "'");
+                }
+            }
+        }
+
+        long size = Files.size(path);
+        if (size > config.getMaxAudioSizeBytes()) {
+            throw new IOException("Audio file exceeds maximum allowed size (" + size + " > " + config.getMaxAudioSizeBytes() + " bytes)");
+        }
+
+        try (InputStream in = Files.newInputStream(path)) {
+            return decodeWavOrPcm(readBoundedStream(in, config.getMaxAudioSizeBytes()));
+        }
+    }
+
+    private byte[] readBoundedStream(InputStream in, int maxBytes) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int total = 0;
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            total += n;
+            if (total > maxBytes) {
+                throw new IOException("Audio prompt size exceeds configured maximum limit of " + maxBytes + " bytes");
+            }
+            baos.write(buf, 0, n);
+        }
+        return baos.toByteArray();
     }
 
     /**

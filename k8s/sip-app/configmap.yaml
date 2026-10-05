@@ -20,6 +20,9 @@ data:
     sip.server.tcp-enabled=true
     sip.server.tcp.host=0.0.0.0
     sip.server.tcp.port=5060
+
+    # Advertised IP (Downward API status.hostIP)
+    sip.server.advertised-ip=${SIP_SERVER_ADVERTISED_IP:}
     
     # Server identity and timeouts
     sip.server.enabled=true

@@ -31,8 +31,31 @@ SIP and RTP services have specific networking characteristics in Kubernetes:
   - `NodePort`: Suitable for bare-metal or on-premises edge SBC routing.
   - `hostNetwork: true`: For ultra-low latency or large dynamic RTP port ranges without kube-proxy SNAT overhead.
 
-### 2. Media Streaming (RTP UDP Ports 10000–20000)
-- The media modules use symmetric RTP latching (RFC 4961). The server binds dynamic even UDP ports within `rtp.media.min-port` (10000) to `rtp.media.max-port` (20000) and dynamically latches the remote client's media address upon receiving the first inbound UDP packet.
+### 2. Media Streaming & Advertised IP Resolution (RTP UDP Ports 10000–20000)
+VoIP media servers negotiate dynamic UDP ports per active call in SDP offer/answer exchanges (`m=audio <port> RTP/AVP ...` and `c=IN IP4 <ip>`). In Kubernetes, dynamic RTP media traversal requires special architectural handling:
+
+1. **Host Network Mode (`hostNetwork: true` & `dnsPolicy: ClusterFirstWithHostNet`)**:
+   - Both `sip-app` and `micronaut-netann` deployments configure `hostNetwork: true`. This binds the container directly to the host node's network interfaces, eliminating `kube-proxy` SNAT/DNAT overhead and allowing direct packet transmission across the full dynamic RTP port range (`10000–20000`).
+   - `dnsPolicy: ClusterFirstWithHostNet` preserves internal Kubernetes CoreDNS resolution while operating on the host network.
+
+2. **Advertised IP via Downward API (`SIP_SERVER_ADVERTISED_IP`)**:
+   - When a pod sends an SDP answer or a SIP provisional/success response with a `Contact` header, it must NOT advertise `127.0.0.1` or internal container IP addresses to remote external clients.
+   - The deployment manifests inject the host node's external/routable IP using the Kubernetes Downward API:
+     ```yaml
+     - name: SIP_SERVER_ADVERTISED_IP
+       valueFrom:
+         fieldRef:
+           fieldPath: status.hostIP
+     ```
+   - Both `CallController` and `AnnouncementController` resolve `sip.server.advertised-ip` (falling back to host IP or non-loopback interface) and insert this routable address into:
+     - The `Contact` header: `<sip:<advertised-ip>:<server-port>>` (using the server's listening port, NOT the client's remote port).
+     - The SDP connection line: `c=IN IP4 <advertised-ip>`.
+     - The SDP origin line: `o=MicronautSIP ... IN IP4 <advertised-ip>`.
+     - In-dialog `BYE` requests: `Via: SIP/2.0/UDP <advertised-ip>:<server-port>;branch=...`.
+
+3. **Service Port Range & Symmetric RTP Latching**:
+   - The `Service` manifests declare representative media ports (`10000`, `10002`, `10004`, `10006`, `10008`, `10010`) to facilitate cloud firewall/security group port discovery.
+   - The media manager uses symmetric RTP latching (RFC 4961): when the remote endpoint emits its first RTP packet to the negotiated local RTP port, the server automatically latches onto the remote client's source IP and port.
 
 ### 3. Observability & Health Probes (Port 8080 TCP)
 - **Liveness Probe**: `HTTP GET :8080/health/liveness`

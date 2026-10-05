@@ -2,20 +2,20 @@
 
 ## Automated Test Suites & Quality Assurance Architecture
 
-The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **182 automated JVM tests** across all 5 Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
+The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **192 automated JVM tests** across all 5 Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
 
 ```mermaid
 flowchart TD
     L4["<b>Layer 4: Performance & Load Benchmarks</b><br/>SIPp v3.7 sustained 15,000 calls @ 50 cps & 1,000 burst calls @ 200 cps<br/>+ Netem loss benchmarks (20% & 30% packet loss)"]
     L3["<b>Layer 3: Protocol Conformance Testing</b><br/>ETSI TS 102 027-2 specification suite executed via sip-tt (100% passing)"]
-    L2["<b>Layer 2: Full-Stack Network Integration & Application Tests</b><br/>:sip-app (38 tests over Netty UDP, TCP, SDP, RTP & 100rel)<br/>:micronaut-netann (9 tests for RFC 4240 NetAnn announcement service & RTP audio)"]
-    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (108 tests) | :micronaut-rtp (23 tests) | :micronaut-sdp (4 tests)"]
+    L2["<b>Layer 2: Full-Stack Network Integration & Application Tests</b><br/>:sip-app (38 tests over Netty UDP, TCP, SDP, RTP & 100rel)<br/>:micronaut-netann (17 tests for RFC 4240 NetAnn announcement, security & RTP audio)"]
+    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (108 tests) | :micronaut-rtp (23 tests) | :micronaut-sdp (5 tests)"]
     L4 --> L3
     L3 --> L2
     L2 --> L1
 ```
 
-### Test Suites Summary (182 Automated Tests)
+### Test Suites Summary (192 Automated Tests)
 
 | Module | Test Suite Class | Tests | Primary Focus & Target Specifications |
 | :--- | :--- | :---: | :--- |
@@ -47,8 +47,8 @@ flowchart TD
 | `:micronaut-rtp` | [`RtpAudioHookTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpAudioHookTest.java) | 6 | Inbound/outbound audio processing hooks, Goertzel dual-tone multifrequency detector, voice activity detection, and reactive PCM frame streaming |
 | `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 25 | Live UDP network call flows, RFC 3262 100rel PRACK flow, mid-dialog INFO DTMF relay, late/early-offer SDP, dynamic RTP probe, netem packet drop resilience |
 | `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 10 | End-to-end TCP streaming call flows, RFC 3262 PRACK over TCP, TCP DTMF relay, framing reassembly, RFC 5626 keep-alive, TCP SDP/RTP integration |
-| `:sip-app` | [`SipAppTest`](../sip-app/src/test/java/net/pilgrim/SipAppTest.java) | 3 | Micronaut application context DI, compile-time route processor, duplicate route collision prevention |
 | `:micronaut-netann` | [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) | 9 | RFC 4240 NetAnn announcement service (`annc`), `play`/`repeat`/`delay`/`duration` parameters, 20ms RTP audio streaming, auto-`BYE`, error semantics (`400`, `404`, `488`), and TCP transport |
+| `:micronaut-netann` | [`AnnouncementSecurityAndNetworkingTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementSecurityAndNetworkingTest.java) | 8 | SSRF prevention (blocking private/loopback/metadata IPs), 10MB memory size caps, `repeat=forever` duration ceiling, per-IP concurrency throttling (`503`), and Contact port verification |
 
 ---
 

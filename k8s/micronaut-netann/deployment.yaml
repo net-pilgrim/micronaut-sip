@@ -23,6 +23,8 @@ spec:
         prometheus.io/port: "8080"
         prometheus.io/path: "/prometheus"
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -41,16 +43,47 @@ spec:
           ports:
             - name: sip-udp
               containerPort: 5060
+              hostPort: 5060
               protocol: UDP
             - name: sip-tcp
               containerPort: 5060
+              hostPort: 5060
               protocol: TCP
             - name: http-mgmt
               containerPort: 8080
+              hostPort: 8080
               protocol: TCP
+            - name: rtp-10000
+              containerPort: 10000
+              hostPort: 10000
+              protocol: UDP
+            - name: rtp-10002
+              containerPort: 10002
+              hostPort: 10002
+              protocol: UDP
+            - name: rtp-10004
+              containerPort: 10004
+              hostPort: 10004
+              protocol: UDP
+            - name: rtp-10006
+              containerPort: 10006
+              hostPort: 10006
+              protocol: UDP
+            - name: rtp-10008
+              containerPort: 10008
+              hostPort: 10008
+              protocol: UDP
+            - name: rtp-10010
+              containerPort: 10010
+              hostPort: 10010
+              protocol: UDP
           env:
             - name: MICRONAUT_ENVIRONMENTS
               value: "k8s,prod"
+            - name: SIP_SERVER_ADVERTISED_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: SIP_SERVER_UDP_HOST
               value: "0.0.0.0"
             - name: SIP_SERVER_UDP_PORT
