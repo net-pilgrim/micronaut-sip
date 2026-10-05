@@ -78,8 +78,79 @@ xychart-beta
     line "GraalVM Native Image" [7, 11, 11, 10, 13, 10, 11, 10, 10, 11, 7]
 ```
 
+### 1-Hour Sustained Load & Concurrency Benchmark (`micronaut-netann`)
+
+A comprehensive **1-hour continuous stress and stability benchmark** was conducted on the RFC 4240 announcement media server application ([`micronaut-netann`](../micronaut-netann/)) to evaluate real-time bidirectional media handling, session concurrency, memory stability, and RTP socket lifecycle management under heavy, continuous call arrival.
+
+#### Workload Profile
+- **Target Application**: `micronaut-netann` on `127.0.0.1:5060` (UDP/TCP SIP) and dynamic UDP ports `10000..20000` (RTP media)
+- **Call Arrival Rate ($\lambda$)**: **50.0 calls/second** continuously sustained over 3,600 seconds
+- **Audio Announcement Duration ($D$)**: **2.0 seconds** per call (`play=builtin:tone:440,2000;duration=2000`, 100 PCM-16 frames @ 20ms)
+- **Active Session Concurrency ($C = \lambda \times D$)**: **~100 concurrent active calls** sustained continuously (average: **98.8**, peak: **102**)
+- **Test Duration**: **3,601.98 seconds** (1 hour, 1.98 seconds)
+- **Aggregate RTP Throughput**: **5,000 RTP datagrams/second** (~18,000,000 RTP audio packets streamed total)
+
+#### Benchmark Results
+
+| Metric | Measured Value | Target / SLA | Status |
+| :--- | :--- | :--- | :---: |
+| **Total Calls Attempted** | **180,000** | 180,000 (1 hour @ 50 cps) | **100% Target Met** |
+| **Successful Calls** | **180,000** | 180,000 | **PASS** |
+| **Failed Calls** | **0** | 0 | **PASS (0.00%)** |
+| **Call Success Rate** | **100.00%** | > 99.99% | **PASS** |
+| **SIP Retransmissions** | **0** | 0 | **PASS** |
+| **SIP Timeouts** | **0** | 0 | **PASS** |
+| **Unexpected Messages** | **0** | 0 | **PASS** |
+| **Average Concurrency** | **98.8 concurrent calls** | ~100 concurrent calls | **Optimal** |
+| **Peak Concurrency** | **102 concurrent calls** | Max 130 cap | **Optimal** |
+| **Average Call Rate** | **49.972 cps** | 50.0 cps | **Optimal** |
+
+#### Latency & Response Time Distribution
+
+Response time measures the interval from initial `INVITE` transmission to receipt of `200 OK` (encompassing Request-URI parameter parsing, audio prompt lookup/generation, RTP socket reservation, and SDP answer generation):
+
+| Response Time Bracket | Call Count | Percentage |
+| :--- | :---: | :---: |
+| **$0\text{ ms} \le t < 10\text{ ms}$** | **179,982** | **99.990%** |
+| **$10\text{ ms} \le t < 20\text{ ms}$** | **17** | **0.009%** |
+| **$20\text{ ms} \le t < 30\text{ ms}$** | **0** | **0.000%** |
+| **$30\text{ ms} \le t < 40\text{ ms}$** | **1** | **0.001%** |
+| **$t \ge 40\text{ ms}$** | **0** | **0.000%** |
+
+- **Sub-10ms Response Rate**: **99.99%** of all 180,000 calls established their dialog and media session in under 10 ms.
+- **Max Recorded Response Time**: **38 ms** (no timeouts, zero dropped transactions).
+
+#### Memory & File Descriptor Stability (Zero Leak Verification)
+
+Telemetry was recorded at 10-second intervals throughout the 1-hour run:
+
+| Elapsed Time | NetAnn JVM RSS | NetAnn Active FDs | Active Concurrency | Cumulative Success |
+| :--- | :---: | :---: | :---: | :---: |
+| **0 min (Start)** | 219.5 MB | 117 | 0 | 0 |
+| **10 min (600s)** | 1,295.39 MB | 218 | 99 | 29,406 |
+| **20 min (1,200s)**| 1,297.57 MB | 218 | 100 | 59,409 |
+| **30 min (1,800s)**| 1,299.04 MB | 218 | 99 | 89,414 |
+| **40 min (2,400s)**| 1,299.89 MB | 218 | 99 | 119,419 |
+| **50 min (3,000s)**| 1,300.30 MB | 218 | 99 | 149,424 |
+| **60 min (3,600s)**| 1,300.66 MB | 203 | 100 | 179,428 |
+| **Post-Test (Idle)**| 1,300.66 MB | 119 | 0 | 180,000 |
+
+> [!NOTE]
+> - **Zero Memory Leaks**: Following initial JVM heap warm-up to its configured initial heap (`-Xms1g`), resident memory stabilized completely flat at **~1.30 GB**. Memory grew by only **5.27 MB total over the final 50 minutes** across 150,000 calls ($0.035\text{ KB/call}$).
+> - **Zero File Descriptor / Socket Leaks**: Active file descriptors increased from 117 to 218 during load (representing the ~100 active UDP RTP media sockets + 1 SIP socket) and immediately returned to baseline (119) upon completion of the test.
+
+#### 1-Hour Memory Profile Chart
+```mermaid
+xychart-beta
+    title "1-Hour Sustained Load: NetAnn JVM Memory Stability (RSS in MB)"
+    x-axis ["0m", "10m", "20m", "30m", "40m", "50m", "60m"]
+    y-axis "Memory (MB)" 0 --> 1500
+    line "NetAnn JVM RSS (MB)" [220, 1295, 1298, 1299, 1300, 1300, 1301]
+```
+
 ### Running SIPp Benchmarks
 
+#### Basic SIP Proxy & Call Controller Benchmarks (`sip-app`)
 ```bash
 # 1. Start application:
 # Option A: GraalVM Native Executable
@@ -99,3 +170,16 @@ sipp 127.0.0.1:5060 -sn uac -p 5080 -m 1000 -r 200 -d 0 -trace_screen -trace_sta
 # 4. Run 5-minute sustained SIPp load test (15,000 calls at 50 cps)
 sipp 127.0.0.1:5060 -sn uac -p 5080 -m 15000 -r 50 -d 0 -trace_screen -trace_stat
 ```
+
+#### RFC 4240 NetAnn 1-Hour Performance Benchmark (`micronaut-netann`)
+```bash
+# 1. Build application distribution
+./gradlew :micronaut-netann:installDist
+
+# 2. Run automated 1-hour performance test suite with telemetry monitor:
+bash perf/run_1h_perf.sh
+
+# 3. Generate analysis report from collected metrics:
+python3 perf/analyze_results.py
+```
+

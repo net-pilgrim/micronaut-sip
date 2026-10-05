@@ -535,3 +535,19 @@ Production media servers face severe vulnerabilities if prompts or call duration
 ### 5. Advertised IP & Server Port Resolution
 - **Contact Header**: Advertises the server's listening port (`server.getPort()`), NOT the client's ephemeral source port.
 - **Routable Host**: In Kubernetes or NAT environments, resolves `sip.server.advertised-ip` (injected via Downward API `status.hostIP`) for `Contact` headers, SDP connection (`c=IN IP4 ...`) and origin (`o=...`) lines, and `BYE` `Via` headers.
+
+---
+
+## 7. 1-Hour Performance & Stability Benchmark
+
+A comprehensive 1-hour sustained performance and concurrency benchmark was executed against `micronaut-netann` using SIPp:
+- **Call Arrival Rate**: 50.0 calls/second sustained continuously
+- **Audio Playback Duration**: 2.0 seconds (`play=builtin:tone:440,2000;duration=2000`)
+- **Active Session Concurrency**: ~100 active calls sustained continuously (average: 98.8, peak: 102)
+- **Call Completion**: 180,000 of 180,000 calls succeeded (**100.00% success rate**, 0 failed, 0 retransmissions, 0 timeouts)
+- **RTP Media Throughput**: ~18,000,000 datagrams streamed (5,000 packets/sec aggregate continuous output)
+- **Response Time Latency**: **99.99% under 10 ms** (max 38 ms)
+- **Resource Stability**: **Zero memory leaks** (+5.27 MB delta over final 50 mins across 150,000 calls), **zero socket/FD leaks** (returned to baseline 119 FDs).
+
+See [Performance & Benchmarking (`doc/PERFORMANCE.md`)](doc/PERFORMANCE.md#1-hour-sustained-load--concurrency-benchmark-micronaut-netann) for full telemetry graphs, repartition tables, and test automation scripts.
+

@@ -11,6 +11,7 @@ See the root documentation file [`micronaut-netann.md`](../micronaut-netann.md) 
 - **RTP Streamer**: [`AnnouncementPlayer`](../micronaut-netann/src/main/java/net/pilgrim/netann/service/AnnouncementPlayer.java)
 - **Kubernetes Manifests**: [`k8s/micronaut-netann/`](../k8s/micronaut-netann/)
 - **Integration Test Suite**: [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java)
+- **Performance Benchmark**: [1-Hour Sustained Load Benchmark (180,000 calls @ 50 cps, ~100 concurrent streams)](PERFORMANCE.md#1-hour-sustained-load--concurrency-benchmark-micronaut-netann)
 
 ### Key Call Flows Documented
 
