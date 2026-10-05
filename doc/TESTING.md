@@ -2,20 +2,20 @@
 
 ## Automated Test Suites & Quality Assurance Architecture
 
-The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **133 automated JVM tests** across all 4 Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
+The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **182 automated JVM tests** across all 5 Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
 
 ```mermaid
 flowchart TD
     L4["<b>Layer 4: Performance & Load Benchmarks</b><br/>SIPp v3.7 sustained 15,000 calls @ 50 cps & 1,000 burst calls @ 200 cps<br/>+ Netem loss benchmarks (20% & 30% packet loss)"]
     L3["<b>Layer 3: Protocol Conformance Testing</b><br/>ETSI TS 102 027-2 specification suite executed via sip-tt (100% passing)"]
-    L2["<b>Layer 2: Full-Stack Network Integration Tests</b><br/>:sip-app (33 tests over live Netty UDP datagram, TCP streaming sockets, SDP, & RTP)"]
-    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (82 tests) | :micronaut-rtp (14 tests) | :micronaut-sdp (4 tests)"]
+    L2["<b>Layer 2: Full-Stack Network Integration & Application Tests</b><br/>:sip-app (38 tests over Netty UDP, TCP, SDP, RTP & 100rel)<br/>:micronaut-netann (9 tests for RFC 4240 NetAnn announcement service & RTP audio)"]
+    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (108 tests) | :micronaut-rtp (23 tests) | :micronaut-sdp (4 tests)"]
     L4 --> L3
     L3 --> L2
     L2 --> L1
 ```
 
-### Test Suites Summary (133 Automated Tests)
+### Test Suites Summary (182 Automated Tests)
 
 | Module | Test Suite Class | Tests | Primary Focus & Target Specifications |
 | :--- | :--- | :---: | :--- |
@@ -33,19 +33,26 @@ flowchart TD
 | `:micronaut-sip` | [`SipRouteBindingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRouteBindingTest.java) | 2 | Controller parameter binding annotations (`@SipCallId`, `@SipFrom`, `@SipParam`, etc.) |
 | `:micronaut-sip` | [`SipServerHealthIndicatorTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipServerHealthIndicatorTest.java) | 2 | Micronaut Management `/health` endpoint integration for UDP/TCP server and session metrics |
 | `:micronaut-sip` | [`SipTimerTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipTimerTest.java) | 28 | RFC 3261 timers: Timer A & E retransmissions, Timer B & F, Timer D ACK resend, Timer G & H UAS 2xx, Timer J replay, auto 100 Trying, TTL, virtual time, race conditions |
+| `:micronaut-sip` | [`SipExtendedMethodsTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipExtendedMethodsTest.java) | 7 | RFC 3262 / RFC 6665 / RFC 3515 / RFC 3311 / RFC 3903 dispatching (`@OnPrack`, `@OnSubscribe`, `@OnNotify`, `@OnRefer`, `@OnUpdate`, `@OnPublish`) |
+| `:micronaut-sip` | [`SipRouteDtmfBindingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRouteDtmfBindingTest.java) | 4 | Controller parameter binding for `@SipDtmf` (`DtmfSignal`, `char`, `String`) and required validation |
+| `:micronaut-sip` | [`DtmfSignalTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/dtmf/DtmfSignalTest.java) | 10 | RFC 4733 / RFC 6086 DTMF tone normalization, bounds, body generation and parsing (`application/dtmf-relay`, `application/dtmf`) |
+| `:micronaut-sip` | [`SipMessageDtmfTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/model/SipMessageDtmfTest.java) | 5 | SIP message DTMF payload attachment, extraction, and content-type convenience helpers |
 | `:micronaut-sdp` | [`SdpNegotiatorTest`](../micronaut-sdp/src/test/java/net/pilgrim/sdp/SdpNegotiatorTest.java) | 4 | RFC 4566 / RFC 3264 SDP parsing, offer generation, direction negotiation (hold), and codec filtering |
 | `:micronaut-rtp` | [`MediaPortManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/MediaPortManagerTest.java) | 2 | RFC 3550 §11 even RTP / companion odd RTCP dynamic port allocation and pool exhaustion handling |
 | `:micronaut-rtp` | [`RtpNettyStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/transport/RtpNettyStreamingTest.java) | 2 | Asynchronous Netty UDP pipeline packetization, framing, and reactive inbound packet streaming |
 | `:micronaut-rtp` | [`G711CodecTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/G711CodecTest.java) | 4 | RFC 3551 G.711 PCMU (payload type 0) & PCMA (payload type 8) audio transcoding and clipping fidelity |
+| `:micronaut-rtp` | [`AudioFrameTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/AudioFrameTest.java) | 3 | 16-bit linear PCM audio frame encapsulation, little-endian short conversions, and RMS / dBFS energy calculation |
 | `:micronaut-rtp` | [`RtpStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/RtpStreamingTest.java) | 3 | RFC 3550 packet serialization, header flag parsing, and offline sender/receiver streaming |
 | `:micronaut-rtp` | [`RtpMediaManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpMediaManagerTest.java) | 3 | Concurrent media session allocation, dedicated Netty event loop group isolation, and lifecycle teardown |
-| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 22 | Live UDP network call flows, late/early-offer SDP negotiation, dynamic RTP probe emission, netem packet drop resilience |
-| `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 8 | End-to-end TCP streaming network call flows, framing reassembly, persistent reuse, RFC 5626 keep-alive, TCP SDP/RTP integration |
+| `:micronaut-rtp` | [`RtpAudioHookTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpAudioHookTest.java) | 6 | Inbound/outbound audio processing hooks, Goertzel dual-tone multifrequency detector, voice activity detection, and reactive PCM frame streaming |
+| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 25 | Live UDP network call flows, RFC 3262 100rel PRACK flow, mid-dialog INFO DTMF relay, late/early-offer SDP, dynamic RTP probe, netem packet drop resilience |
+| `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 10 | End-to-end TCP streaming call flows, RFC 3262 PRACK over TCP, TCP DTMF relay, framing reassembly, RFC 5626 keep-alive, TCP SDP/RTP integration |
 | `:sip-app` | [`SipAppTest`](../sip-app/src/test/java/net/pilgrim/SipAppTest.java) | 3 | Micronaut application context DI, compile-time route processor, duplicate route collision prevention |
+| `:micronaut-netann` | [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) | 9 | RFC 4240 NetAnn announcement service (`annc`), `play`/`repeat`/`delay`/`duration` parameters, 20ms RTP audio streaming, auto-`BYE`, error semantics (`400`, `404`, `488`), and TCP transport |
 
 ---
 
-### Detailed Breakdown: `:micronaut-sip` Unit & Component Suites (82 Tests)
+### Detailed Breakdown: `:micronaut-sip` Unit & Component Suites (108 Tests)
 
 #### 1. [`SipParserTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipParserTest.java) (5 Tests)
 - **`testParseStandardInvite`**: Verifies zero-copy string parsing of an RFC 3261 standard `INVITE` datagram, verifying Request-URI, method, SIP version, headers (`Via`, `From`, `To`, `Call-ID`, `CSeq`, `Contact`, `Content-Type`, `Content-Length`), and SDP body payload extraction.
@@ -161,6 +168,40 @@ flowchart TD
 - **`testSecondInviteDuringProceedingRejectedWith500AndRetryAfter`**: Enforces RFC 3261 §14.2: when a second `INVITE` arrives on the same dialog while the initial transaction is still in `Proceeding` state, the server rejects it with `500 Server Internal Error` containing a randomized `Retry-After: 1..10` header.
 - **`testDuplicateInviteRetransmitsProvisionalResponse`**: Enforces RFC 3261 §17.2.1: retransmitted `INVITE` requests arriving while the server transaction is in `Proceeding` state immediately re-send the cached provisional response (`180 Ringing`) without invoking controller logic twice.
 
+#### 15. [`SipExtendedMethodsTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipExtendedMethodsTest.java) (7 Tests)
+- **`testPrackDispatch`**: Verifies RFC 3262 provisional acknowledgement dispatching to `@OnPrack` controller handlers.
+- **`testSubscribeDispatch`**: Verifies RFC 6665 event subscription dispatching to `@OnSubscribe` controller handlers.
+- **`testNotifyDispatch`**: Verifies RFC 6665 event notification dispatching to `@OnNotify` controller handlers.
+- **`testReferDispatch`**: Verifies RFC 3515 call transfer dispatching to `@OnRefer` controller handlers.
+- **`testUpdateDispatch`**: Verifies RFC 3311 session modification dispatching to `@OnUpdate` controller handlers.
+- **`testPublishDispatchWithPathMatching`**: Verifies RFC 3903 publication dispatching to `@OnPublish` controller handlers with path-based URI pattern filtering.
+- **`testAllowedMethodsIncludesAllExtendedMethods`**: Verifies that the server's synthesized `Allow` header dynamically advertises all registered extended methods (`PRACK`, `SUBSCRIBE`, `NOTIFY`, `REFER`, `UPDATE`, `PUBLISH`).
+
+#### 16. [`SipRouteDtmfBindingTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/SipRouteDtmfBindingTest.java) (4 Tests)
+- **`testDtmfSignalBinding`**: Validates declarative `@SipDtmf DtmfSignal` parameter injection from inbound DTMF relay payloads.
+- **`testCharAndStringDtmfBinding`**: Validates automatic primitive conversion of DTMF tones to `char` and `String` method parameters.
+- **`testUnannotatedDtmfSignalBinding`**: Confirms that method arguments of type `DtmfSignal` without explicit `@SipDtmf` annotation are resolved and injected cleanly.
+- **`testRequiredDtmfThrowsWhenMissing`**: Asserts that requests lacking DTMF payloads fail with a descriptive binding exception when `@SipDtmf(required = true)`.
+
+#### 17. [`DtmfSignalTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/dtmf/DtmfSignalTest.java) (10 Tests)
+- **`testValidDigitsAndNormalization`**: Validates standard telephone keypad digits (`0`-`9`, `*`, `#`, `A`-`D`) and upper-case normalization.
+- **`testInvalidDigitsThrowException`**: Confirms that non-telephony characters throw `IllegalArgumentException`.
+- **`testDurationAndVolumeDefaults`**: Validates default duration (160ms) and volume attenuation (-10 dBm0) compliance.
+- **`testToRelayBody`**: Validates serialization into RFC 4733 / RFC 6086 `application/dtmf-relay` text formatting (`Signal=...`, `Duration=...`).
+- **`testToDtmfBody`**: Validates serialization into `application/dtmf` compact format.
+- **`testParseApplicationDtmfRelay`**: Validates robust parsing of RFC 6086 relay payloads with key-value pairs.
+- **`testParseApplicationDtmf`**: Validates parsing of RFC 4733 plain numeric tone indicators.
+- **`testParseTextPlainAndLooseFormats`**: Verifies parsing of loose plain-text DTMF representation.
+- **`testNonDtmfContentReturnsEmpty`**: Asserts that unrecognized content types or empty payloads return `Optional.empty()` safely.
+- **`testEqualsAndHashCode`**: Validates value object equality and hash contract.
+
+#### 18. [`SipMessageDtmfTest`](../micronaut-sip/src/test/java/net/pilgrim/sip/model/SipMessageDtmfTest.java) (5 Tests)
+- **`testRequestWithDtmfRelay`**: Confirms that `SipRequest.getDtmfSignal()` extracts DTMF from `application/dtmf-relay` requests.
+- **`testRequestWithDtmfPlain`**: Confirms extraction from `application/dtmf` bodies.
+- **`testRequestConvenienceDtmfBuilders`**: Tests fluent builder API for constructing DTMF requests with appropriate `Content-Type`.
+- **`testNonDtmfRequest`**: Asserts that non-DTMF requests (e.g., SDP offers) return `Optional.empty()`.
+- **`testSetDtmfOnResponse`**: Validates attaching DTMF confirmation attributes to outbound SIP responses.
+
 ---
 
 ### Detailed Breakdown: `:micronaut-sdp` Unit Suites (4 Tests)
@@ -173,7 +214,7 @@ flowchart TD
 
 ---
 
-### Detailed Breakdown: `:micronaut-rtp` Streaming Suites (14 Tests)
+### Detailed Breakdown: `:micronaut-rtp` Streaming Suites (23 Tests)
 
 #### 1. [`MediaPortManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/MediaPortManagerTest.java) (2 Tests)
 - **`allocatesEvenPortsAndTracksState`**: Validates RFC 3550 §11 port allocation: dynamically assigns even UDP ports ($P$) for RTP and implicitly reserves the paired odd port ($P+1$) for RTCP within the configured range (default 10000–20000).
@@ -189,21 +230,34 @@ flowchart TD
 - **`clippingBoundariesUlaw`**: Tests amplitude clamping and saturation handling at positive and negative 16-bit PCM extrema for $\mu$-law.
 - **`clippingBoundariesAlaw`**: Tests amplitude clamping and saturation handling at extrema for A-law.
 
-#### 4. [`RtpStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/RtpStreamingTest.java) (3 Tests)
+#### 4. [`AudioFrameTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/AudioFrameTest.java) (3 Tests)
+- **`testAudioFrameProperties`**: Validates frame instantiation, sample rate, duration calculation, and payload byte array access.
+- **`testToShortArrayLittleEndianConversion`**: Verifies signed 16-bit little-endian byte-to-short audio sample unpacking.
+- **`testRmsAndDbfsOnSilenceAndTone`**: Validates audio signal energy computation, testing Root Mean Square (RMS) and decibels relative to full scale (dBFS) for digital silence versus sinusoidal full-scale signals.
+
+#### 5. [`RtpStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/RtpStreamingTest.java) (3 Tests)
 - **`serializesAndParsesRtpPacket`**: Tests RFC 3550 wire-level byte serialization and zero-copy packet header extraction (version, padding, extension, CSRC count, marker bit, payload type, sequence number, timestamp, SSRC).
 - **`packetizerIncrementsSequenceAndTimestamp`**: Verifies that `RtpPacketizer` monotonically increments sequence numbers and scales sample timestamps per 20ms packet duration (160 samples @ 8000 Hz).
 - **`blockingSocketSenderReceiverIntegration`**: Validates loopback UDP streaming using standard blocking I/O primitives (`RtpStreamSender` and `RtpStreamReceiver`).
 
-#### 5. [`RtpMediaManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpMediaManagerTest.java) (3 Tests)
+#### 6. [`RtpMediaManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpMediaManagerTest.java) (3 Tests)
 - **`createsAndTerminatesSession`**: Verifies lifecycle binding of `RtpMediaSession` by SIP `Call-ID`, verifying port allocation and channel closure on `terminateSession()`.
 - **`supportsConcurrentSessions`**: Verifies concurrent session allocation across independent threads without port collisions.
 - **`cleanShutdownClosesChannels`**: Confirms that graceful shutdown of `RtpMediaManager` closes all active Netty datagram channels and terminates the dedicated media event loop group.
 
+#### 7. [`RtpAudioHookTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpAudioHookTest.java) (6 Tests)
+- **`inboundAndOutboundProcessorsCaptureFrames`**: Validates interceptor pipeline hooking on incoming and outgoing RTP media audio frames.
+- **`goertzelDetectorHookDetectsDtmfTone`**: Validates the embedded Goertzel discrete Fourier transform algorithm detecting telephone keypad dual-tone multi-frequencies from raw audio samples.
+- **`voiceActivityDetectionHookDistinguishesSpeechFromSilence`**: Tests energy-based voice activity detection (VAD) differentiating speech activity from background noise or silence.
+- **`mediaManagerSessionInitializerAppliesGlobalAudioProcessor`**: Confirms that global audio processors registered with `RtpMediaManager` are automatically applied to newly created media sessions.
+- **`processorExceptionDoesNotDisruptSession`**: Asserts resilience: unchecked exceptions thrown by user-defined audio hooks are safely trapped and logged without terminating the RTP stream.
+- **`incomingAudioFramesReactiveFluxEmitsDecodedPcm`**: Verifies reactive streaming of decoded 16-bit linear PCM `AudioFrame` instances through Project Reactor `Flux`.
+
 ---
 
-### Detailed Breakdown: `:sip-app` Integration Suites (33 Tests)
+### Detailed Breakdown: `:sip-app` Integration Suites (38 Tests)
 
-#### 1. [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) (22 Tests over UDP)
+#### 1. [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) (25 Tests over UDP)
 - **`testServerIsRunning`**: Asserts that the Netty NIO datagram channel successfully binds to port 5060 and the application context starts cleanly.
 - **`testFullCallFlow`**: Executes complete RFC 3261 terminating dialog lifecycle over live UDP sockets:
   1. Client sends `INVITE` with SDP offer.
@@ -212,10 +266,13 @@ flowchart TD
   4. Client acknowledges with `ACK`.
   5. Client terminates call with `BYE`.
   6. Server acknowledges termination with `200 OK`.
+- **`test100RelPrackFlowUdp`**: Enforces RFC 3262: executes reliable provisional response flow (`180 Ringing` with `Require: 100rel` and `RSeq`), acknowledges with client `PRACK` matching `RAck`, and completes call setup with `200 OK` and `ACK`.
 - **`testRegisterFlow`**: Validates SIP user registration (`REGISTER`), verifying Contact header echoing and custom headers (`X-Registered-User`, `Expires: 3600`).
 - **`testRegisterFlowWithExplicitUriParam`**: Tests request-URI parameter parsing over the network (`sip:registrar@127.0.0.1:5060;transport=udp`).
-- **`testOptionsFlow`**: Validates RFC 3261 §11 capability discovery (`OPTIONS`), asserting that the server returns `200 OK` with `Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE`.
+- **`testOptionsFlow`**: Validates RFC 3261 §11 capability discovery (`OPTIONS`), asserting that the server returns `200 OK` with `Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO, PRACK, SUBSCRIBE, NOTIFY, REFER, UPDATE, PUBLISH`.
 - **`testMessageFlow`**: Validates RFC 3428 instant messaging (`MESSAGE`), asserting `200 OK` delivery for text payloads.
+- **`testDtmfOverSipInfoMidDialog`**: Validates mid-dialog RFC 2976 / RFC 6086 DTMF relay: client transmits `INFO` with `application/dtmf-relay` (`Signal=5`, `Duration=160`), server parses `@SipDtmf` parameter, appends tone to `SipSession` attributes, and confirms with `200 OK` (`X-Received-DTMF: 5`).
+- **`testDtmfOverSipMessage`**: Validates standalone RFC 3428 instant messaging DTMF tone delivery: client sends `MESSAGE` with `application/dtmf-relay`, server resolves `@SipDtmf` and returns `200 OK`.
 - **`testUnsupportedMethodReturnsMethodNotAllowed`**: Enforces RFC 3261 §8.2.1: sending an unmapped method (`FOOBAR`) yields `405 Method Not Allowed` with an `Allow` header listing registered routes.
 - **`testMalformedRequestMissingMandatoryHeadersReturnsBadRequest`**: Enforces RFC 3261 §8.1.1: sending an `INVITE` missing `Call-ID` or `CSeq` yields `400 Bad Request`.
 - **`testUnsupportedRequireReturnsBadExtension`**: Enforces RFC 3261 §8.2.2: sending a request with `Require: 100rel, unknown-ext-123` yields `420 Bad Extension` with `Unsupported: unknown-ext-123`.
@@ -233,10 +290,12 @@ flowchart TD
 - **`testDynamicRtpPortAllocatedAndReleasedOnBye`**: Verifies that `CallController` allocates a dynamic Netty RTP port from `MediaPortManager` during call setup and deterministically releases it upon `BYE`.
 - **`testAckTriggersRtpProbeOverUdp`**: Verifies that receiving an `ACK` on a confirmed dialog triggers an initial RTP media probe packet to the client's negotiated media address over UDP.
 
-#### 2. [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) (8 Tests over TCP)
+#### 2. [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) (10 Tests over TCP)
 - **`testTcpServerIsRunning`**: Verifies that Netty TCP server socket channel binds and accepts incoming TCP connections on port 5060.
 - **`testFullCallFlowOverTcp`**: Executes the complete call signaling flow (`INVITE` -> `180 Ringing` -> `200 OK` -> `ACK` -> `BYE` -> `200 OK`) over a persistent, multiplexed TCP stream socket.
+- **`test100RelPrackFlowTcp`**: Validates RFC 3262 reliable provisional response and PRACK exchange over a persistent, multiplexed TCP stream socket.
 - **`testMessageOverTcp`**: Verifies instant messaging (`MESSAGE`) framing and transaction delivery over TCP.
+- **`testDtmfOverTcp`**: Validates mid-dialog RFC 2976 / RFC 6086 DTMF tone relay signaling over TCP streaming connection.
 - **`testRegisterOverTcp`**: Verifies registration transaction processing over TCP.
 - **`testOptionsOverTcp`**: Verifies `OPTIONS` capability exchange over TCP.
 - **`testTcpKeepAliveAndFraming`**: Tests RFC 5626 §4.4 keep-alive behavior: injects leading CRLF and double CRLF ping sequences before valid SIP frames; confirms `SipStreamFrameDecoder` discards keep-alive bytes without corrupting subsequent SIP message boundaries.
@@ -250,9 +309,24 @@ flowchart TD
 
 ---
 
+### Detailed Breakdown: `:micronaut-netann` Integration Suites (9 Tests)
+
+#### 1. [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) (9 Tests)
+- **`testSuccessfulAnnouncementPlaybackAndRtpStreaming`**: Validates complete RFC 4240 NetAnn announcement lifecycle: sends `INVITE sip:annc@...;play=tone:440` with SDP offer, verifies `200 OK` with negotiated SDP answer, sends `ACK`, and confirms reception of live 20ms G.711 $\mu$-law RTP audio packets over UDP.
+- **`testAnnouncementCompletionEmitsBye`**: Verifies RFC 4240 §2 termination: media server streams the entire configured audio prompt and automatically initiates call teardown by sending an in-dialog `BYE` request to the client upon playback completion.
+- **`testMissingPlayParameterReturns400`**: Enforces RFC 4240 §2 mandatory parameter validation: an `INVITE` to `sip:annc@...` lacking the mandatory `play=` parameter is immediately rejected with `400 Bad Request` and reason `"Mandatory play parameter missing"`.
+- **`testNonExistentAnnouncementReturns404`**: Enforces RFC 4240 error semantics: an announcement URI referencing a non-existent or unresolvable audio file yields `404 Not Found` with reason `"Announcement content not found"`.
+- **`testUnsupportedServiceIndicatorReturns488`**: Enforces RFC 4240 §2: requests directed to unhandled service identifiers (such as `sip:conf@...` or unknown user parts) are rejected with `488 Not Acceptable Here`.
+- **`testEarlyByeTerminatesPlayback`**: Verifies that when a caller hangs up prematurely by sending an in-dialog `BYE` before announcement completion, playback halts immediately, background RTP streamer threads are cancelled, and port resources are released cleanly.
+- **`testBundledWavFilePlayback`**: Tests decoding and streaming of bundled WAV audio assets (`file:`, `classpath:prompts/welcome.wav`) decoded via `AudioSystem` into signed 16-bit linear PCM and packetized into 20ms RTP frames.
+- **`testAnnouncementOverTcp`**: Validates end-to-end NetAnn announcement signaling and session establishment over persistent TCP transport while streaming audio over UDP RTP.
+- **`testOptionsQuery`**: Verifies RFC 3261 §11 capability query on the NetAnn server, returning `200 OK` with supported methods and services.
+
+---
+
 ### Executing Automated Tests
 
-Execute all 133 tests across all 4 modules:
+Execute all 182 tests across all 5 modules:
 ```bash
 ./gradlew check test
 ```
@@ -277,16 +351,23 @@ Execute only the network integration test suite (`:sip-app`):
 ./gradlew :sip-app:test
 ```
 
+Execute only the NetAnn announcement service test suite (`:micronaut-netann`):
+```bash
+./gradlew :micronaut-netann:test
+```
+
 Execute a specific test class:
 ```bash
 ./gradlew :micronaut-sip:test --tests net.pilgrim.sip.SipRateLimitTest
 ./gradlew :sip-app:test --tests net.pilgrim.sip.SipIntegrationTest
+./gradlew :micronaut-netann:test --tests net.pilgrim.netann.AnnouncementIntegrationTest
 ```
 
 View HTML test execution reports:
 ```bash
 open micronaut-sip/build/reports/tests/test/index.html
 open sip-app/build/reports/tests/test/index.html
+open micronaut-netann/build/reports/tests/test/index.html
 ```
 
 ---
@@ -314,17 +395,17 @@ sip-tt run \
   --json-report results.json
 ```
 
-### Conformance Test Results (100% Passed)
+### Conformance Test Results (8 of 8 Passed, 100% Conformance)
 
-| Test Purpose | Specification | Status | Description |
-| :--- | :--- | :--- | :--- |
-| `SIP_CC_TE_CE_V_001` | RFC 3261 §8, §8.2, §13.3.1.1 | **PASSED** | Answers well-formed INVITE with provisional (1xx) and success (2xx) |
-| `SIP_CC_TE_CE_V_006` | RFC 3261 §13.2.1, §13.3.1 | **PASSED** | Bodyless INVITE answered with offer in 2xx and accepts answer in ACK |
-| `SIP_CC_TE_SM_I_001` | RFC 3261 §14.2 | **PASSED** | Second INVITE during `Proceeding` state refused with `500 Server Internal Error` and `Retry-After: 1..10` |
-| `SIP_CC_TE_SM_V_001` | RFC 3261 §14 | **PASSED** | re-INVITE inside dialog is answered with its own CSeq (no cached replay) |
-| `SIP_CC_TE_SM_V_002` | RFC 3261 §14 | **PASSED** | Bodyless re-INVITE accepted with 200 OK containing session offer |
-| `SIP_CC_TE_SM_V_003` | RFC 3261 §13.3.1.4 | **PASSED** | UAS Timer H unacked 2xx retransmission ladder (32s) followed by outbound BYE dialog teardown |
-| `LOCAL-SDP-ANSWER-KEEPS-OFFERED-PAYLOAD-NUMBERS` | RFC 3264 §6.1 | **PASSED** | SDP answer preserves offered payload type number bindings |
-| `LOCAL-SDP-HOLD-IS-HONOURED` | RFC 3264 §6.1, §8.4 | **PASSED** | Offer of `a=sendonly` (call hold) answered with `a=recvonly` |
+| Test Purpose | Specification | Status | Duration | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `SIP_CC_TE_CE_V_001` | RFC 3261 §8, §8.2, §13.3.1.1 | **PASSED** | 0.31s | Answers well-formed INVITE with provisional (1xx) and success (2xx) |
+| `SIP_CC_TE_CE_V_006` | RFC 3261 §13.2.1, §13.3.1 | **PASSED** | 3.31s | Bodyless INVITE answered with offer in 2xx and accepts answer in ACK |
+| `SIP_CC_TE_SM_I_001` | RFC 3261 §14.2 | **PASSED** | 0.01s | Second INVITE during `Proceeding` state refused with `500 Server Internal Error` and `Retry-After: 1..10` |
+| `SIP_CC_TE_SM_V_001` | RFC 3261 §14 | **PASSED** | 0.62s | re-INVITE inside dialog is answered with its own CSeq (no cached replay) |
+| `SIP_CC_TE_SM_V_002` | RFC 3261 §14 | **PASSED** | 0.62s | Bodyless re-INVITE accepted with 200 OK containing session offer |
+| `SIP_CC_TE_SM_V_003` | RFC 3261 §13.3.1.4 | **PASSED** | 32.62s | UAS Timer H unacked 2xx retransmission ladder (32s) followed by outbound BYE dialog teardown |
+| `LOCAL-SDP-ANSWER-KEEPS-OFFERED-PAYLOAD-NUMBERS` | RFC 3264 §6.1 | **PASSED** | 0.45s | SDP answer preserves offered payload type number bindings |
+| `LOCAL-SDP-HOLD-IS-HONOURED` | RFC 3264 §6.1, §8.4 | **PASSED** | 3.62s | Offer of `a=sendonly` (call hold) answered with `a=recvonly` and media transmission cleanly silenced |
 
 ---

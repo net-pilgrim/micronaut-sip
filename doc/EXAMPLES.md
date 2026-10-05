@@ -98,8 +98,21 @@ public class CallController {
     @OnOptions
     public SipResponse onOptions(SipRequest request) {
         SipResponse response = SipResponse.ok(request);
-        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO");
+        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO, PRACK, SUBSCRIBE, NOTIFY, REFER, UPDATE, PUBLISH");
         return response;
+    }
+
+    // Handles PRACK (Provisional Response Acknowledgement, RFC 3262)
+    @OnPrack
+    public Mono<SipResponse> onPrack(SipRequest request,
+                                     @SipCallId String callId,
+                                     @SipHeader(value = SipHeaders.RACK, required = false) String rack,
+                                     SipSession session) {
+        LOG.info("Received PRACK for Call-ID: {} with RAck: {}", callId, rack);
+        if (session == null || session.getState() == SipSession.State.TERMINATED) {
+            return Mono.just(SipResponse.transactionDoesNotExist(request));
+        }
+        return Mono.just(SipResponse.ok(request));
     }
 
     // Handles instant MESSAGE (RFC 3428) with @SipFrom and @SipDtmf injection
@@ -132,6 +145,85 @@ public class CallController {
             ok.getHeaders().set("X-Received-DTMF", String.valueOf(dtmf.getDigit()));
             return Mono.just(ok);
         }
+        return Mono.just(SipResponse.ok(request));
+    }
+}
+```
+
+---
+
+## Example RFC 4240 NetAnn Announcement Controller (`micronaut-netann`)
+
+In [`micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java):
+
+```java
+@SipController
+public class AnnouncementController {
+
+    private final RtpMediaManager rtpMediaManager;
+    private final AnnouncementAudioLoader audioLoader;
+    private final SdpNegotiator sdpNegotiator = new SdpNegotiator();
+    private final Map<String, AnnouncementPlayer> activePlayers = new ConcurrentHashMap<>();
+
+    // Handles RFC 4240 Announcement Service (sip:annc@...)
+    @OnInvite("annc")
+    public Mono<SipResponse> onAnnouncementInvite(SipRequest request,
+                                                  @SipCallId String callId,
+                                                  @SipBody String sdpOffer,
+                                                  SipSession session) {
+        // 1. Parse announcement parameters (play=, repeat=, delay=, duration=)
+        AnnouncementParams params = AnnouncementParams.parse(request.getUri());
+
+        // 2. Validate mandatory play= parameter (RFC 4240 §2 -> 400 Bad Request)
+        if (params.getPlay() == null || params.getPlay().isBlank()) {
+            return Mono.just(request.createResponse(SipStatus.BAD_REQUEST, "Mandatory play parameter missing"));
+        }
+
+        // 3. Load audio prompt (tone, file, classpath, or URL -> 404 Not Found on missing)
+        byte[] pcmAudio;
+        try {
+            pcmAudio = audioLoader.loadAudio(params.getPlay());
+        } catch (FileNotFoundException e) {
+            return Mono.just(request.createResponse(SipStatus.NOT_FOUND, "Announcement content not found"));
+        }
+
+        // 4. Allocate Netty RTP media session and negotiate SDP Answer
+        RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
+        String sdpAnswer = sdpNegotiator.createAnswer(sdpOffer != null ? sdpOffer : "", mediaSession.getLocalPort());
+
+        session.setState(SipSession.State.EARLY);
+        session.setAttribute("anncParams", params);
+        session.setAttribute("pcmAudio", pcmAudio);
+
+        return Mono.just(SipResponse.ok(request, sdpAnswer, "application/sdp"));
+    }
+
+    // Handles ACK: marks session CONFIRMED and initiates 20ms RTP audio streaming
+    @OnAck("annc")
+    public void onAnnouncementAck(SipRequest request,
+                                  @SipCallId String callId,
+                                  SipSession session) {
+        session.setState(SipSession.State.CONFIRMED);
+
+        AnnouncementPlayer player = new AnnouncementPlayer(
+                callId, session, rtpMediaSession, remoteAudioAddress, pcmAudio, params,
+                () -> terminateAnnouncementCall(callId, session) // Auto-BYE callback on completion
+        );
+        activePlayers.put(callId, player);
+        player.start();
+    }
+
+    // Unhandled NetAnn services (e.g. conf=, dialog) rejected per RFC 4240 §2
+    @OnInvite
+    public Mono<SipResponse> onUnsupportedService(SipRequest request) {
+        return Mono.just(request.createResponse(SipStatus.NOT_ACCEPTABLE_HERE, "Unsupported NetAnn service"));
+    }
+
+    // Handles BYE: caller hung up early; halts playback and releases resources
+    @OnBye
+    public Mono<SipResponse> onBye(SipRequest request, @SipCallId String callId) {
+        stopPlayer(callId);
+        rtpMediaManager.terminateSession(callId);
         return Mono.just(SipResponse.ok(request));
     }
 }

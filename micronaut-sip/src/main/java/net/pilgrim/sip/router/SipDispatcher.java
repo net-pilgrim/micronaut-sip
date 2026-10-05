@@ -85,10 +85,55 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
     private final List<SipErrorRoute> errorRoutes = new CopyOnWriteArrayList<>();
     private final ConcurrentMap<String, PendingServerTransaction> pendingTransactions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Pending2xxRetransmission> pending2xxRetransmissions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, PendingReliableProvisional> pendingReliableResponses = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, SipResponse> nonInviteResponseCache = new ConcurrentHashMap<>();
     private final List<SipServerFilter> filters = new CopyOnWriteArrayList<>();
 
     private volatile Scheduler timerScheduler = Schedulers.parallel();
+
+    public static class PendingReliableProvisional {
+        private final String callId;
+        private final long rseq;
+        private final long cseqNumber;
+        private final String cseqMethod;
+        private final SipRequest originalRequest;
+        private final SipResponse response;
+        private final Consumer<SipResponse> sender;
+        private final AtomicBoolean prackReceived = new AtomicBoolean(false);
+        private final AtomicReference<Disposable> retransmitDisposable = new AtomicReference<>();
+        private final AtomicReference<Disposable> timeoutDisposable = new AtomicReference<>();
+
+        public PendingReliableProvisional(String callId, long rseq, long cseqNumber, String cseqMethod,
+                                          SipRequest originalRequest, SipResponse response, Consumer<SipResponse> sender) {
+            this.callId = callId;
+            this.rseq = rseq;
+            this.cseqNumber = cseqNumber;
+            this.cseqMethod = cseqMethod;
+            this.originalRequest = originalRequest;
+            this.response = response;
+            this.sender = sender;
+        }
+
+        public String getCallId() { return callId; }
+        public long getRSeq() { return rseq; }
+        public long getCSeqNumber() { return cseqNumber; }
+        public String getCSeqMethod() { return cseqMethod; }
+        public SipRequest getOriginalRequest() { return originalRequest; }
+        public SipResponse getResponse() { return response; }
+        public Consumer<SipResponse> getSender() { return sender; }
+        public AtomicBoolean getPrackReceived() { return prackReceived; }
+        public AtomicReference<Disposable> getRetransmitDisposable() { return retransmitDisposable; }
+        public void setRetransmitDisposable(Disposable d) { this.retransmitDisposable.set(d); }
+        public void setTimeoutDisposable(Disposable d) { this.timeoutDisposable.set(d); }
+
+        public void cancel() {
+            prackReceived.set(true);
+            Disposable d1 = retransmitDisposable.getAndSet(null);
+            if (d1 != null) d1.dispose();
+            Disposable d2 = timeoutDisposable.getAndSet(null);
+            if (d2 != null) d2.dispose();
+        }
+    }
 
     public static class Pending2xxRetransmission {
         private final String callId;
@@ -541,6 +586,55 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                 }
             }
 
+            // RFC 3262 §3 & §4: PRACK matching and reliable provisional response retransmission cancellation
+            if (request.getMethod() == SipMethod.PRACK) {
+                String rack = request.getHeaders().get(SipHeaders.RACK);
+                if (rack == null || rack.isBlank()) {
+                    LOG.warn("PRACK request missing RAck header (Call-ID: {})", request.getCallId());
+                    metrics.requestRejected("missing_rack");
+                    sink.next(SipResponse.badRequest(request, "Missing RAck header"));
+                    sink.complete();
+                    return;
+                }
+                String[] rackParts = rack.trim().split("\\s+");
+                if (rackParts.length < 3) {
+                    LOG.warn("PRACK request has malformed RAck header '{}' (Call-ID: {})", rack, request.getCallId());
+                    metrics.requestRejected("malformed_rack");
+                    sink.next(SipResponse.badRequest(request, "Malformed RAck header"));
+                    sink.complete();
+                    return;
+                }
+                long rackRSeq;
+                long rackCSeq;
+                try {
+                    rackRSeq = Long.parseLong(rackParts[0]);
+                    rackCSeq = Long.parseLong(rackParts[1]);
+                } catch (NumberFormatException e) {
+                    LOG.warn("PRACK request has invalid numbers in RAck header '{}' (Call-ID: {})", rack, request.getCallId());
+                    metrics.requestRejected("malformed_rack_numbers");
+                    sink.next(SipResponse.badRequest(request, "Invalid numbers in RAck header"));
+                    sink.complete();
+                    return;
+                }
+                String rackMethod = rackParts[2];
+
+                PendingReliableProvisional pendingRel = pendingReliableResponses.remove(request.getCallId());
+                if (pendingRel != null) {
+                    if (pendingRel.getRSeq() == rackRSeq && pendingRel.getCSeqNumber() == rackCSeq
+                            && pendingRel.getCSeqMethod().equalsIgnoreCase(rackMethod)) {
+                        LOG.debug("PRACK matched reliable provisional response (RSeq={}, Call-ID: {}). Cancelling retransmissions.", rackRSeq, request.getCallId());
+                        pendingRel.cancel();
+                    } else {
+                        LOG.warn("PRACK RAck ({}) does not match pending reliable response (RSeq={}, CSeq={} {}) for Call-ID: {}",
+                                rack, pendingRel.getRSeq(), pendingRel.getCSeqNumber(), pendingRel.getCSeqMethod(), request.getCallId());
+                        metrics.requestRejected("rack_mismatch");
+                        sink.next(SipResponse.transactionDoesNotExist(request));
+                        sink.complete();
+                        return;
+                    }
+                }
+            }
+
             // RFC 3261 Section 9.2: CANCEL Transaction Matching and auto 487 Request Terminated
             if (request.getMethod() == SipMethod.CANCEL && configuration.isAutoCancelEnabled()) {
                 String txKey = resolveTransactionKey(request);
@@ -569,6 +663,9 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                 LOG.info("Matching pending INVITE transaction found for CANCEL: Call-ID={}. Cancelling transaction.", request.getCallId());
                 boolean cancelled = pendingTx.cancel();
                 if (cancelled) {
+                    PendingReliableProvisional pendingRel = pendingReliableResponses.remove(request.getCallId());
+                    if (pendingRel != null) pendingRel.cancel();
+
                     // 1. Emit 200 OK to the CANCEL request
                     sink.next(SipResponse.ok(request));
                     sink.complete();
@@ -665,6 +762,8 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                     pendingTransactions.remove(activeTx.getTransactionKey());
                     activeTx.disposeAll();
                 }
+                PendingReliableProvisional pendingRel = pendingReliableResponses.remove(request.getCallId());
+                if (pendingRel != null) pendingRel.cancel();
             });
 
             Consumer<SipResponse> terminalSender = resp -> {
@@ -675,6 +774,9 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                     return;
                 }
                 if (resp.isFinal()) {
+                    PendingReliableProvisional pendingRel = pendingReliableResponses.remove(request.getCallId());
+                    if (pendingRel != null) pendingRel.cancel();
+
                     // Timer J: Cache final response for non-INVITE server transactions over UDP (RFC 3261 §17.2.2)
                     if (request.getMethod() != SipMethod.INVITE && request.getMethod() != SipMethod.ACK
                             && request.getTransport() != SipTransport.TCP && configuration.getTimerJDelayMs() > 0) {
@@ -704,6 +806,27 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                         if (activeTx != null) {
                             activeTx.setLastProvisionalResponse(resp);
                         }
+                        // RFC 3262: Retransmit reliable provisional responses over UDP until PRACK
+                        if (resp.getStatusCode() > 100 && resp.getStatusCode() < 200
+                                && (resp.getHeaders().contains(SipHeaders.RSEQ)
+                                    || resp.getHeaders().containsToken(SipHeaders.REQUIRE, "100rel"))) {
+                            String rseqStr = resp.getHeaders().getRSeq();
+                            long rseq = 1;
+                            if (rseqStr != null) {
+                                try {
+                                    rseq = Long.parseLong(rseqStr.trim());
+                                } catch (NumberFormatException ignored) {}
+                            }
+                            if (request.getTransport() != SipTransport.TCP && configuration.isUas100relRetransmitEnabled()) {
+                                startReliableProvisionalRetransmission(request, resp, rseq, originalSender);
+                            } else {
+                                PendingReliableProvisional pending = new PendingReliableProvisional(
+                                        request.getCallId(), rseq, request.getCSeqNumber(),
+                                        request.getMethod() != null ? request.getMethod().name() : "INVITE",
+                                        request, resp, originalSender);
+                                pendingReliableResponses.put(request.getCallId(), pending);
+                            }
+                        }
                         sink.next(resp);
                     }
                 }
@@ -718,6 +841,19 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
             }
 
             if (matchedRoute == null) {
+                if (request.getMethod() == SipMethod.PRACK) {
+                    if (sessionManager.getSession(request.getCallId()) == null
+                            && pendingTransactions.values().stream().noneMatch(t -> Objects.equals(t.getRequest().getCallId(), request.getCallId()))) {
+                        LOG.warn("PRACK received for unknown session/transaction Call-ID: {}", request.getCallId());
+                        sink.next(SipResponse.transactionDoesNotExist(request));
+                        sink.complete();
+                        return;
+                    }
+                    LOG.debug("Auto-responding 200 OK to PRACK for Call-ID: {}", request.getCallId());
+                    sink.next(SipResponse.ok(request));
+                    sink.complete();
+                    return;
+                }
                 if (tryingTimer != null) tryingTimer.dispose();
                 if (activeTx != null) {
                     pendingTransactions.remove(activeTx.getTransactionKey());
@@ -1064,6 +1200,54 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
         }
     }
 
+    private void startReliableProvisionalRetransmission(SipRequest request, SipResponse response, long rseq, Consumer<SipResponse> sender) {
+        String key = request.getCallId();
+        PendingReliableProvisional pending = new PendingReliableProvisional(
+                key, rseq, request.getCSeqNumber(), request.getMethod().name(), request, response, sender);
+        pendingReliableResponses.put(key, pending);
+
+        long t1 = configuration.getT1Ms();
+        long t2 = configuration.getT2Ms();
+        long timeoutDelay = configuration.getTimerBDelayMs(); // 64 * T1
+
+        scheduleReliableProvisionalRetransmit(pending, t1, t2);
+
+        Disposable timeoutDisp = Mono.delay(Duration.ofMillis(timeoutDelay), timerScheduler)
+                .subscribe(tick -> {
+                    if (pending.getPrackReceived().compareAndSet(false, true)) {
+                        LOG.warn("PRACK timeout (64*T1) for Call-ID: {}. No PRACK received within {}ms.", key, timeoutDelay);
+                        pendingReliableResponses.remove(key);
+                        Disposable retr = pending.getRetransmitDisposable().getAndSet(null);
+                        if (retr != null) retr.dispose();
+                    }
+                });
+        pending.setTimeoutDisposable(timeoutDisp);
+    }
+
+    private void scheduleReliableProvisionalRetransmit(PendingReliableProvisional pending, long currentDelay, long t2) {
+        Disposable d = Mono.delay(Duration.ofMillis(currentDelay), timerScheduler)
+                .subscribe(tick -> {
+                    if (pending.getPrackReceived().get()) {
+                        return;
+                    }
+                    LOG.debug("Retransmitting reliable provisional response {} for Call-ID: {} (interval: {}ms)",
+                            pending.getResponse().getStatusCode(), pending.getCallId(), currentDelay);
+                    pending.getSender().accept(pending.getResponse());
+
+                    long nextDelay = Math.min(currentDelay * 2, t2);
+                    scheduleReliableProvisionalRetransmit(pending, nextDelay, t2);
+                });
+        pending.setRetransmitDisposable(d);
+    }
+
+    public int getPendingReliableResponseCount() {
+        return pendingReliableResponses.size();
+    }
+
+    public boolean hasPendingReliableResponse(String callId) {
+        return pendingReliableResponses.containsKey(callId);
+    }
+
     public int getPending2xxRetransmissionCount() {
         return pending2xxRetransmissions.size();
     }
@@ -1081,6 +1265,10 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
             p.cancel();
         }
         pending2xxRetransmissions.clear();
+        for (PendingReliableProvisional p : pendingReliableResponses.values()) {
+            p.cancel();
+        }
+        pendingReliableResponses.clear();
         nonInviteResponseCache.clear();
     }
 }

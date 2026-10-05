@@ -21,12 +21,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -85,6 +87,26 @@ public class CallController {
 
         // 180 Ringing provisional response
         SipResponse ringing = SipResponse.ringing(request);
+        int contactPort = (request.getRemoteAddress() != null) ? request.getRemoteAddress().getPort() : 5060;
+        String contactUri = "<sip:127.0.0.1:" + contactPort + ">";
+
+        boolean require100rel = request.getHeaders().containsToken(SipHeaders.REQUIRE, "100rel");
+        boolean supported100rel = request.getHeaders().containsToken(SipHeaders.SUPPORTED, "100rel");
+        boolean reliable100rel = require100rel || supported100rel;
+
+        Sinks.One<Void> prackSink = null;
+        if (reliable100rel) {
+            ringing.getHeaders().set(SipHeaders.REQUIRE, "100rel");
+            ringing.getHeaders().setRSeq(1);
+            ringing.getHeaders().setContact(contactUri);
+            if (session != null) {
+                session.setAttribute("rseq", 1L);
+                session.setAttribute("cseqNumber", request.getCSeqNumber());
+                session.setAttribute("cseqMethod", request.getMethod() != null ? request.getMethod().name() : "INVITE");
+                prackSink = Sinks.one();
+                session.setAttribute("prackSink", prackSink);
+            }
+        }
 
         // 200 OK carries SDP answer for early-offer INVITE and SDP offer for late-offer INVITE.
         SipResponse ok;
@@ -98,7 +120,10 @@ public class CallController {
             session.setAttribute("localSdpOffer", localOffer);
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
-        ok.getHeaders().setContact("<sip:127.0.0.1:" + request.getRemoteAddress().getPort() + ">");
+        ok.getHeaders().setContact(contactUri);
+        if (ringing.getTo() != null) {
+            ok.getHeaders().setTo(ringing.getTo());
+        }
 
         long delayMs = 300;
         String pickupDelay = request.getHeaders().get("X-Pickup-Delay");
@@ -108,10 +133,18 @@ public class CallController {
             } catch (NumberFormatException ignored) {}
         }
 
+        Mono<SipResponse> delayedOk = Mono.just(ok).delayElement(Duration.ofMillis(delayMs));
+        if (prackSink != null) {
+            delayedOk = Mono.when(
+                    prackSink.asMono().timeout(Duration.ofSeconds(5), Mono.empty()),
+                    Mono.delay(Duration.ofMillis(delayMs))
+            ).thenReturn(ok);
+        }
+
         // Reactively emit 180 Ringing immediately, then 200 OK after delayMs (simulating call pickup)
         return Flux.concat(
                 Mono.just(ringing),
-                Mono.just(ok).delayElement(Duration.ofMillis(delayMs))
+                delayedOk
         );
     }
 
@@ -238,13 +271,59 @@ public class CallController {
     }
 
     /**
+     * Handles PRACK (Provisional Response Acknowledgement) per RFC 3262.
+     * Validates the RAck header against the session, completes any pending PRACK sink,
+     * and returns 200 OK to acknowledge the PRACK request.
+     */
+    @OnPrack
+    public Mono<SipResponse> onPrack(SipRequest request,
+                                     @SipCallId String callId,
+                                     @SipHeader(value = SipHeaders.RACK, required = false) String rack,
+                                     @SipBody(required = false) String prackBody,
+                                     SipSession session) {
+        LOG.info("Received PRACK for Call-ID: {} with RAck: {}", callId, rack);
+        if (session == null || session.getState() == SipSession.State.TERMINATED) {
+            LOG.warn("Received PRACK for non-existent or terminated session Call-ID: {}", callId);
+            return Mono.just(SipResponse.transactionDoesNotExist(request));
+        }
+
+        if (rack != null && !rack.isBlank()) {
+            String[] parts = rack.trim().split("\\s+");
+            if (parts.length >= 2) {
+                try {
+                    long prackRSeq = Long.parseLong(parts[0]);
+                    Long sessionRSeq = session.getAttribute("rseq");
+                    if (sessionRSeq != null && sessionRSeq != prackRSeq) {
+                        LOG.warn("PRACK RSeq mismatch for Call-ID: {}: expected {}, received {}",
+                                callId, sessionRSeq, prackRSeq);
+                        return Mono.just(SipResponse.transactionDoesNotExist(request));
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+
+        if (request.getContentType() != null && request.getContentType().equalsIgnoreCase("application/sdp")
+                && prackBody != null && !prackBody.isBlank()) {
+            session.setAttribute("sdpAnswer", prackBody);
+            LOG.info("Received SDP answer in PRACK for Call-ID: {} ({} bytes)", callId, prackBody.length());
+        }
+
+        Sinks.One<Void> prackSink = session.getAttribute("prackSink");
+        if (prackSink != null) {
+            prackSink.tryEmitEmpty();
+        }
+
+        return Mono.just(SipResponse.ok(request));
+    }
+
+    /**
      * Handles OPTIONS request for capability querying.
      */
     @OnOptions
     public SipResponse onOptions(SipRequest request) {
         LOG.info("Received OPTIONS request from {}", request.getFrom());
         SipResponse response = SipResponse.ok(request);
-        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO");
+        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO, PRACK");
         response.getHeaders().set(SipHeaders.SUPPORTED, "replaces, 100rel");
         response.getHeaders().set(SipHeaders.RECV_INFO, "dtmf");
         return response;
@@ -325,6 +404,45 @@ public class CallController {
         SdpMessage.MediaDescription audio = parsed.findFirstAudioMedia();
         if (audio == null || audio.getPort() <= 0) {
             return;
+        }
+
+        // RFC 3264 hold semantics: if remote offered sendonly or inactive (so local is recvonly/inactive),
+        // do not send RTP packets!
+        String remoteDirection = audio.getAttributes().stream()
+                .filter(a -> a.equalsIgnoreCase("sendrecv") || a.equalsIgnoreCase("sendonly")
+                        || a.equalsIgnoreCase("recvonly") || a.equalsIgnoreCase("inactive"))
+                .findFirst()
+                .orElse(parsed.getDirectionAttribute());
+        if (remoteDirection != null) {
+            String lower = remoteDirection.trim().toLowerCase(Locale.ROOT);
+            if (lower.equals("sendonly") || lower.equals("inactive")) {
+                LOG.info("Call-ID {} is on hold (remote direction={}), suppressing RTP probe", callId, lower);
+                return;
+            }
+        }
+
+        String localAnswer = session.getAttribute("sdpAnswer");
+        if (localAnswer != null && !localAnswer.isBlank()) {
+            try {
+                SdpMessage localParsed = SDP_PARSER.parse(localAnswer);
+                String localDir = localParsed.getDirectionAttribute();
+                SdpMessage.MediaDescription localAudio = localParsed.findFirstAudioMedia();
+                if (localAudio != null && localAudio.getAttributes() != null) {
+                    for (String a : localAudio.getAttributes()) {
+                        if (a.equalsIgnoreCase("sendrecv") || a.equalsIgnoreCase("sendonly")
+                                || a.equalsIgnoreCase("recvonly") || a.equalsIgnoreCase("inactive")) {
+                            localDir = a.toLowerCase(Locale.ROOT);
+                        }
+                    }
+                }
+                if (localDir != null) {
+                    String lower = localDir.trim().toLowerCase(Locale.ROOT);
+                    if (lower.equals("recvonly") || lower.equals("inactive")) {
+                        LOG.info("Call-ID {} local direction is {}, suppressing RTP probe", callId, lower);
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {}
         }
 
         Optional<RtpCodec> codec = audio.getFormats().stream()

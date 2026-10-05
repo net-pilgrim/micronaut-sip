@@ -172,6 +172,26 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
         return lowerToActualKey.containsKey(lower);
     }
 
+    /**
+     * Checks if the specified header contains the given token (case-insensitive),
+     * splitting comma-separated values if present across all instances of the header.
+     */
+    public boolean containsToken(String name, String token) {
+        if (name == null || token == null) return false;
+        List<String> values = getAll(name);
+        for (String val : values) {
+            if (val != null) {
+                String[] parts = val.split(",");
+                for (String part : parts) {
+                    if (part.trim().equalsIgnoreCase(token.trim())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     public SipHeaders remove(String name) {
         if (name == null) return this;
         String lower = normalizeHeaderName(name).toLowerCase(Locale.ROOT);
@@ -258,6 +278,16 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
 
     public String getServer() { return get(SERVER); }
     public SipHeaders setServer(String server) { return set(SERVER, server); }
+
+    public String getRSeq() { return get(RSEQ); }
+    public SipHeaders setRSeq(long rseq) { return set(RSEQ, String.valueOf(rseq)); }
+    public SipHeaders setRSeq(String rseq) { return set(RSEQ, rseq); }
+
+    public String getRAck() { return get(RACK); }
+    public SipHeaders setRAck(String rack) { return set(RACK, rack); }
+    public SipHeaders setRAck(long rseq, long cseq, String method) {
+        return set(RACK, rseq + " " + cseq + " " + method);
+    }
 
     @Override
     public String toString() {

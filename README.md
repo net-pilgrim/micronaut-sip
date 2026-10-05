@@ -32,6 +32,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
    - High-throughput parser and encoder handling request lines, status lines, multi-value headers, line folding, compact header aliases (`v`, `f`, `t`, `i`, `m`, `c`, `l`), and body payloads (e.g. SDP).
    - Compliant response generation (RFC 3261 §8.2.6) with automatic propagation of `Via`, `From`, `To` (with tag generation), `Call-ID`, and `CSeq`.
    - Request validation enforcing RFC 3261 §8.1/§8.2: missing mandatory headers yield `400 Bad Request`, unsupported methods yield `405 Method Not Allowed` with dynamic `Allow` header, and unsupported `Require` extensions yield `420 Bad Extension` with `Unsupported` header.
+   - Reliable provisional responses (`100rel` / `RSeq`) and provisional response acknowledgement (`PRACK` / `RAck`) support with retransmission and transaction matching (RFC 3262).
 
 2. **NAT Traversal & Symmetric Response Routing (RFC 3581 & RFC 3261 §18.2.1)**:
    - Automatic `Via` header processing and IP spoofing mitigation: inserts `received` parameter when source IP differs from `sent-by` host.
@@ -77,6 +78,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
      - `sendWithProvisional(request, destination)`: provisional + final responses (`Flux<SipResponse>`), with the same transport auto-resolution.
      - `send(request, destination, SipTransport)`: explicit override when transport must be forced.
    - `sendAck(...)`: Sends an RFC 3261-compliant ACK over UDP or TCP, with optional SDP payload support for late-offer/answer call flows.
+   - `sendPrack(...)`: Sends an RFC 3262-compliant PRACK acknowledging reliable provisional responses.
    - `sendBye(...)`: Terminates active calls over UDP or TCP.
 
 6. **Dialog & Session Management (`SipSessionManager`)**:
@@ -132,8 +134,16 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - RTP packet model/parser (`RtpPacket`) with zero-copy Netty `ByteBuf` and `byte[]` serialization, and stream packetizer (`RtpPacketizer`).
     - Asynchronous Netty UDP transport (`RtpNettyReceiver`, `RtpNettySender`, `RtpDatagramCodec`) powered by dedicated media event loops.
     - High-concurrency media session coordinator (`RtpMediaManager`, `RtpMediaSession`) with dynamic port pair allocation (`MediaPortManager`, RFC 3550 §11) and symmetric RTP latching (RFC 4961).
+    - Audio frame interceptors and DSP hooks (`AudioFrameProcessor`, `GoertzelDetector`, `SimpleVad`, `AudioFrame`).
     - Pluggable codec SPI (`RtpCodec`, `RtpCodecRegistry`) with G.711 support (`PCMU`/payload type `0`, `PCMA`/payload type `8`).
     - Standard blocking primitives (`RtpStreamSender`, `RtpStreamReceiver`) retained for lightweight/offline tooling.
+
+16. **NetAnn Basic Media Announcement Service Module (`micronaut-netann`)**:
+    - RFC 4240 compliant standalone Media Server Announcement Service (`sip:annc@...`).
+    - Parses Request-URI parameters: `play=<uri>`, `repeat=<count|forever>`, `delay=<ms>`, `duration=<ms>`, `locale`, and `content-type`.
+    - Resolves audio content from `classpath:`, `file:`, `/provisioned/`, `http(s):`, and synthetic frequencies (`tone:<freq>`), streaming 20ms G.711 PCMU/PCMA frames over RTP.
+    - Strict RFC 4240 error handling: `400 Bad Request` on missing `play=`, `404 Not Found` on non-existent audio, and `488 Not Acceptable Here` on unhandled service indicators.
+    - Automatic dialog completion: emits in-dialog `BYE` upon playback completion, or cleanly tears down background streaming upon caller `BYE`/`CANCEL`.
 
 ---
 
@@ -143,9 +153,16 @@ See the [RFC compliance matrix](doc/COMPLIANCE.md) for implemented standards and
 
 ---
 
-## Examples
+## Examples & Call Flows
 
-See [doc/EXAMPLES.md](doc/EXAMPLES.md) for controller and reactive filter examples.
+- See [doc/EXAMPLES.md](doc/EXAMPLES.md) for SIP controller and reactive filter examples.
+- See [micronaut-netann.md](micronaut-netann.md) for RFC 4240 NetAnn announcement service architecture, parameter specs, and detailed call flows with sequence diagrams.
+
+---
+
+## Kubernetes Deployment
+
+See [k8s/README.md](k8s/README.md) for production Kubernetes manifests (`k8s/`) and deployment guidelines.
 
 ---
 
@@ -208,14 +225,21 @@ sip.server.max-sessions=10000
 ./gradlew :sip-app:run
 ```
 
+### Run NetAnn Announcement Service
+```bash
+./gradlew :micronaut-netann:run
+```
+
 ### Build GraalVM Native Executable
 ```bash
 ./gradlew :sip-app:nativeCompile
+./gradlew :micronaut-netann:nativeCompile
 ```
 
 ### Run Native Executable
 ```bash
 ./sip-app/build/native/nativeCompile/sip-app
+./micronaut-netann/build/native/nativeCompile/micronaut-netann
 ```
 
 ### Publish Library to Maven Local

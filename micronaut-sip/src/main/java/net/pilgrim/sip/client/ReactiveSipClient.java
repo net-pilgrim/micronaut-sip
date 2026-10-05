@@ -519,6 +519,73 @@ public class ReactiveSipClient {
     }
 
     /**
+     * Sends a PRACK request acknowledging receipt of a reliable provisional response (RFC 3262).
+     */
+    public Mono<SipResponse> sendPrack(SipRequest originalInvite,
+                                       SipResponse reliableProvisionalResponse,
+                                       InetSocketAddress destination) {
+        return sendPrack(originalInvite, reliableProvisionalResponse, destination, resolveTransport(originalInvite));
+    }
+
+    public Mono<SipResponse> sendPrack(SipRequest originalInvite,
+                                       SipResponse reliableProvisionalResponse,
+                                       InetSocketAddress destination,
+                                       SipTransport transport) {
+        return sendPrack(originalInvite, reliableProvisionalResponse, destination, null, null, transport);
+    }
+
+    public Mono<SipResponse> sendPrack(SipRequest originalInvite,
+                                       SipResponse reliableProvisionalResponse,
+                                       InetSocketAddress destination,
+                                       String body,
+                                       String contentType,
+                                       SipTransport transport) {
+        SipRequest prack = buildPrack(originalInvite, reliableProvisionalResponse, transport, body, contentType);
+        return send(prack, destination, transport);
+    }
+
+    public SipRequest buildPrack(SipRequest originalInvite,
+                                 SipResponse reliableProvisionalResponse,
+                                 SipTransport transport,
+                                 String body,
+                                 String contentType) {
+        SipUri targetUri = originalInvite.getUri();
+        String contact = reliableProvisionalResponse.getContact();
+        if (contact != null && !contact.isBlank()) {
+            try {
+                targetUri = SipUri.parse(contact);
+            } catch (Exception ignored) {}
+        }
+
+        SipRequest prack = new SipRequest(SipMethod.PRACK, targetUri);
+        prack.setTransport(transport);
+        SipHeaders prackHeaders = prack.getHeaders();
+
+        prackHeaders.setCallId(reliableProvisionalResponse.getCallId());
+        prackHeaders.setFrom(reliableProvisionalResponse.getFrom());
+        prackHeaders.setTo(reliableProvisionalResponse.getTo());
+        prackHeaders.setCSeq(cseqCounter.incrementAndGet() + " PRACK");
+        prackHeaders.setMaxForwards(70);
+
+        String rseq = reliableProvisionalResponse.getHeaders().getRSeq();
+        String origCSeq = reliableProvisionalResponse.getCSeq();
+        if (rseq != null && origCSeq != null) {
+            prackHeaders.setRAck(rseq.trim() + " " + origCSeq.trim());
+        }
+
+        if (body != null && !body.isEmpty()) {
+            prack.setBody(body);
+            if (contentType != null && !contentType.isEmpty()) {
+                prackHeaders.setContentType(contentType);
+            }
+        } else {
+            prackHeaders.setContentLength(0);
+        }
+
+        return prack;
+    }
+
+    /**
      * Sends a BYE request to terminate an active call session.
      */
     public Mono<SipResponse> sendBye(SipRequest originalInvite, SipResponse okResponse, InetSocketAddress destination) {

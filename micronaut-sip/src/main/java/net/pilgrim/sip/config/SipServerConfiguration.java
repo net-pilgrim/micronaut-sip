@@ -52,6 +52,7 @@ public class SipServerConfiguration {
     private long ringTimeoutMs = 180000; // 180s ring timeout (post-provisional alerting)
     private boolean clientRetransmitEnabled = true;
     private boolean uas2xxRetransmitEnabled = true;
+    private boolean uas100relRetransmitEnabled = true;
 
     public String getUdpHost() {
         return udpHost;
@@ -455,5 +456,18 @@ public class SipServerConfiguration {
     @Property(name = "sip.server.timer.uas-2xx-retransmit-enabled")
     public void setUas2xxRetransmitNestedEnabled(boolean uas2xxRetransmitEnabled) {
         this.uas2xxRetransmitEnabled = uas2xxRetransmitEnabled;
+    }
+
+    public boolean isUas100relRetransmitEnabled() {
+        return uas100relRetransmitEnabled;
+    }
+
+    public void setUas100relRetransmitEnabled(boolean uas100relRetransmitEnabled) {
+        this.uas100relRetransmitEnabled = uas100relRetransmitEnabled;
+    }
+
+    @Property(name = "sip.server.timer.uas-100rel-retransmit-enabled")
+    public void setUas100relRetransmitNestedEnabled(boolean uas100relRetransmitEnabled) {
+        this.uas100relRetransmitEnabled = uas100relRetransmitEnabled;
     }
 }

@@ -2,9 +2,11 @@ package net.pilgrim.sip;
 
 import net.pilgrim.sip.client.ReactiveSipClient;
 import net.pilgrim.sip.dtmf.DtmfSignal;
+import net.pilgrim.sip.model.SipHeaders;
 import net.pilgrim.sip.model.SipMethod;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
+import net.pilgrim.sip.model.SipTransport;
 import net.pilgrim.sip.session.SipSession;
 import net.pilgrim.sip.session.SipSessionManager;
 import net.pilgrim.sip.transport.SipNettyServer;
@@ -104,6 +106,78 @@ class SipTcpIntegrationTest {
 
         // 3. Send BYE over TCP
         SipResponse byeResponse = client.sendBye(invite, ok, tcpAddress).block(Duration.ofSeconds(3));
+        assertNotNull(byeResponse);
+        assertEquals(200, byeResponse.getStatusCode());
+        assertEquals(SipSession.State.TERMINATED, sessionOpt.get().getState());
+    }
+
+    @Test
+    void test100RelPrackFlowTcp() throws Exception {
+        InetSocketAddress tcpAddress = new InetSocketAddress("127.0.0.1", server.getTcpPort());
+        String callId = "test-100rel-tcp-" + UUID.randomUUID();
+
+        String sdpOffer = """
+                v=0
+                o=Alice 1000 1000 IN IP4 127.0.0.1
+                s=Offer
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 30000 RTP/AVP 0
+                """.replace("\n", "\r\n");
+
+        SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getTcpPort() + ";transport=tcp")
+                .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                .to("<sip:bob@127.0.0.1>")
+                .callId(callId)
+                .header(SipHeaders.REQUIRE, "100rel")
+                .header("X-Pickup-Delay", "50")
+                .contentType("application/sdp")
+                .body(sdpOffer)
+                .build();
+        invite.setTransport(SipTransport.TCP);
+
+        List<SipResponse> responses = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.CountDownLatch ringingLatch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch okLatch = new java.util.concurrent.CountDownLatch(1);
+
+        client.sendWithProvisional(invite, tcpAddress).subscribe(resp -> {
+            responses.add(resp);
+            if (resp.getStatusCode() == 180) {
+                ringingLatch.countDown();
+            } else if (resp.getStatusCode() == 200) {
+                okLatch.countDown();
+            }
+        });
+
+        assertTrue(ringingLatch.await(3, java.util.concurrent.TimeUnit.SECONDS), "Expected 180 Ringing");
+        SipResponse ringing = responses.get(0);
+        assertEquals(180, ringing.getStatusCode());
+        assertTrue(ringing.getHeaders().containsToken(SipHeaders.REQUIRE, "100rel"), "180 must contain Require: 100rel");
+        assertEquals("1", ringing.getHeaders().getRSeq(), "180 must contain RSeq: 1");
+        assertNotNull(ringing.getHeaders().getContact(), "180 must contain Contact");
+        assertTrue(ringing.getTo().contains("tag="), "180 must establish early dialog tag");
+
+        // Verify that 200 OK has NOT yet arrived before PRACK is sent
+        assertEquals(1, responses.size(), "200 OK must not be sent before PRACK");
+
+        // Send PRACK over TCP
+        SipResponse prackResponse = client.sendPrack(invite, ringing, tcpAddress, SipTransport.TCP).block(Duration.ofSeconds(2));
+        assertNotNull(prackResponse, "Expected 200 OK response to PRACK");
+        assertEquals(200, prackResponse.getStatusCode());
+
+        // Now 200 OK to INVITE must arrive
+        assertTrue(okLatch.await(3, java.util.concurrent.TimeUnit.SECONDS), "Expected 200 OK to INVITE after PRACK");
+        assertEquals(2, responses.size());
+        SipResponse ok = responses.get(1);
+        assertEquals(200, ok.getStatusCode());
+        assertEquals(ringing.getTo(), ok.getTo(), "200 OK To tag must match early dialog To tag from 180 Ringing");
+
+        // Send ACK and BYE over TCP
+        client.sendAck(invite, ok, tcpAddress).block(Duration.ofSeconds(2));
+        Optional<SipSession> sessionOpt = sessionManager.findSession(callId);
+        assertTrue(sessionOpt.isPresent());
+
+        SipResponse byeResponse = client.sendBye(invite, ok, tcpAddress, SipTransport.TCP).block(Duration.ofSeconds(3));
         assertNotNull(byeResponse);
         assertEquals(200, byeResponse.getStatusCode());
         assertEquals(SipSession.State.TERMINATED, sessionOpt.get().getState());

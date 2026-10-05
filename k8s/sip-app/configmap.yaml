@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sip-app-config
+  namespace: sip-system
+  labels:
+    app.kubernetes.io/name: sip-app
+    app.kubernetes.io/component: signaling
+    app.kubernetes.io/part-of: micronaut-sip
+data:
+  application.properties: |
+    micronaut.application.name=sip-app
+    
+    # UDP Signaling Configuration
+    sip.server.udp-enabled=true
+    sip.server.udp.host=0.0.0.0
+    sip.server.udp.port=5060
+    
+    # TCP Signaling Configuration
+    sip.server.tcp-enabled=true
+    sip.server.tcp.host=0.0.0.0
+    sip.server.tcp.port=5060
+    
+    # Server identity and timeouts
+    sip.server.enabled=true
+    sip.server.server-name=Micronaut-SIP/1.0
+    sip.server.request-timeout-ms=5000
+    sip.server.auto-cancel-enabled=true
+    sip.server.trying-delay-ms=200
+    
+    # Token-Bucket Rate Limiting (RFC 3261 §21.5.4)
+    sip.server.rate-limit.enabled=true
+    sip.server.rate-limit.requests-per-second=100
+    sip.server.rate-limit.burst-capacity=200
+    sip.server.rate-limit.retry-after-seconds=5
+    sip.server.rate-limit.whitelist=127.0.0.1,::1,10.0.0.0/8
+    sip.server.rate-limit.max-tracked-ips=10000
+    
+    # Access logging and MDC context tracing
+    sip.server.access-log.enabled=true
+    sip.server.mdc.enabled=true
+    
+    # DoS Flood Mitigation (RFC 3261 §21.5.2)
+    sip.server.max-message-size-bytes=65536
+    sip.server.max-header-count=100
+    sip.server.max-header-size-bytes=8192
+    
+    # Dialog and Session Management
+    sip.server.session-ttl-ms=1800000
+    sip.server.max-sessions=10000
+    
+    # RTP Media Manager port range
+    rtp.media.min-port=10000
+    rtp.media.max-port=20000
+    
+    # Micronaut Management & Metrics
+    endpoints.health.enabled=true
+    endpoints.health.sensitive=false
+    endpoints.health.details-visible=ANONYMOUS
+    endpoints.metrics.enabled=true
+    endpoints.metrics.sensitive=false
+    endpoints.prometheus.enabled=true
+    endpoints.prometheus.sensitive=false

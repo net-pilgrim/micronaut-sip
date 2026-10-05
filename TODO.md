@@ -26,7 +26,7 @@ This backlog is based on current implementation gaps visible in `micronaut-sip`,
 
 ## 2) Medium effort, strong protocol value
 
-5. **Reliable provisional responses (`100rel`) and `PRACK` transaction support (RFC 3262)**
+5. ~~**Reliable provisional responses (`100rel`) and `PRACK` transaction support (RFC 3262)**~~ [DONE]
    - **Why:** `CallController` advertises `Supported: ... 100rel`, but no PRACK flow is implemented.
    - **Where:** `sip-app/src/main/java/net/pilgrim/controller/CallController.java`, `micronaut-sip` routing/transaction logic.
    - **Done when:** `Require: 100rel` + `RSeq` + `PRACK` handshake works over UDP/TCP with integration tests.

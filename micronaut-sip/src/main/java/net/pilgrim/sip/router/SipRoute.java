@@ -64,10 +64,11 @@ public class SipRoute {
         }
 
         if (!uriPattern.isEmpty()) {
-            String uriStr = request.getUri() != null ? request.getUri().toString() : "";
-            String userStr = (request.getUri() != null && request.getUri().getUser() != null) ? request.getUri().getUser() : "";
+            String uriStr = request.getUri() != null ? request.getUri().toString().toLowerCase(java.util.Locale.ROOT) : "";
+            String userStr = (request.getUri() != null && request.getUri().getUser() != null) ? request.getUri().getUser().toLowerCase(java.util.Locale.ROOT) : "";
+            String pattern = uriPattern.toLowerCase(java.util.Locale.ROOT);
             // Check if matches either entire URI or user prefix
-            if (!uriStr.contains(uriPattern) && !userStr.startsWith(uriPattern)) {
+            if (!uriStr.contains(pattern) && !userStr.startsWith(pattern)) {
                 return false;
             }
         }
