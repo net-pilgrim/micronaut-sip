@@ -18,25 +18,26 @@ class SipParserTest {
 
     @Test
     void testParseStandardInvite() {
-        String raw =
-                "INVITE sip:bob@biloxi.com SIP/2.0\r\n" +
-                "Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\n" +
-                "Max-Forwards: 70\r\n" +
-                "To: Bob <sip:bob@biloxi.com>\r\n" +
-                "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n" +
-                "Call-ID: a84b4c76e66710@pc33.atlanta.com\r\n" +
-                "CSeq: 314159 INVITE\r\n" +
-                "Contact: <sip:alice@pc33.atlanta.com>\r\n" +
-                "Content-Type: application/sdp\r\n" +
-                "Content-Length: 136\r\n" +
-                "\r\n" +
-                "v=0\r\n" +
-                "o=Alice 2890844526 2890844526 IN IP4 127.0.0.1\r\n" +
-                "s=Phone\r\n" +
-                "c=IN IP4 127.0.0.1\r\n" +
-                "t=0 0\r\n" +
-                "m=audio 49170 RTP/AVP 0\r\n" +
-                "a=rtpmap:0 PCMU/8000\r\n";
+        String raw = """
+                INVITE sip:bob@biloxi.com SIP/2.0
+                Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds
+                Max-Forwards: 70
+                To: Bob <sip:bob@biloxi.com>
+                From: Alice <sip:alice@atlanta.com>;tag=1928301774
+                Call-ID: a84b4c76e66710@pc33.atlanta.com
+                CSeq: 314159 INVITE
+                Contact: <sip:alice@pc33.atlanta.com>
+                Content-Type: application/sdp
+                Content-Length: 136
+
+                v=0
+                o=Alice 2890844526 2890844526 IN IP4 127.0.0.1
+                s=Phone
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 49170 RTP/AVP 0
+                a=rtpmap:0 PCMU/8000
+                """.replace("\n", "\r\n");
 
         SipMessage msg = parser.parse(raw);
         assertTrue(msg.isRequest());
@@ -56,15 +57,16 @@ class SipParserTest {
 
     @Test
     void testParseResponse() {
-        String raw =
-                "SIP/2.0 200 OK\r\n" +
-                "Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\n" +
-                "To: Bob <sip:bob@biloxi.com>;tag=a6c85cf\r\n" +
-                "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n" +
-                "Call-ID: a84b4c76e66710@pc33.atlanta.com\r\n" +
-                "CSeq: 314159 INVITE\r\n" +
-                "Content-Length: 0\r\n" +
-                "\r\n";
+        String raw = """
+                SIP/2.0 200 OK
+                Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds
+                To: Bob <sip:bob@biloxi.com>;tag=a6c85cf
+                From: Alice <sip:alice@atlanta.com>;tag=1928301774
+                Call-ID: a84b4c76e66710@pc33.atlanta.com
+                CSeq: 314159 INVITE
+                Content-Length: 0
+
+                """.replace("\n", "\r\n");
 
         SipMessage msg = parser.parse(raw);
         assertFalse(msg.isRequest());
@@ -82,14 +84,15 @@ class SipParserTest {
 
     @Test
     void testHeaderUnfolding() {
-        String raw =
-                "OPTIONS sip:example.com SIP/2.0\r\n" +
-                "Subject: This is a very long\r\n" +
-                " subject line that is unfolded\r\n" +
-                "\tacross multiple lines\r\n" +
-                "Call-ID: test-fold-123\r\n" +
-                "Content-Length: 0\r\n" +
-                "\r\n";
+        String raw = """
+                OPTIONS sip:example.com SIP/2.0
+                Subject: This is a very long
+                 subject line that is unfolded
+                \tacross multiple lines
+                Call-ID: test-fold-123
+                Content-Length: 0
+
+                """.replace("\n", "\r\n");
 
         SipMessage msg = parser.parse(raw);
         assertEquals("This is a very long subject line that is unfolded across multiple lines",
@@ -98,17 +101,17 @@ class SipParserTest {
 
     @Test
     void testCompactHeaders() {
-        String raw =
-                "INVITE sip:test@domain.com SIP/2.0\r\n" +
-                "v: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK123\r\n" +
-                "f: <sip:caller@domain.com>;tag=abc\r\n" +
-                "t: <sip:callee@domain.com>\r\n" +
-                "i: compact-call-id-999\r\n" +
-                "m: <sip:caller@127.0.0.1:5060>\r\n" +
-                "c: text/plain\r\n" +
-                "l: 5\r\n" +
-                "\r\n" +
-                "hello";
+        String raw = """
+                INVITE sip:test@domain.com SIP/2.0
+                v: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK123
+                f: <sip:caller@domain.com>;tag=abc
+                t: <sip:callee@domain.com>
+                i: compact-call-id-999
+                m: <sip:caller@127.0.0.1:5060>
+                c: text/plain
+                l: 5
+
+                hello""".replace("\n", "\r\n");
 
         SipMessage msg = parser.parse(raw);
         assertEquals("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK123", msg.getVia());

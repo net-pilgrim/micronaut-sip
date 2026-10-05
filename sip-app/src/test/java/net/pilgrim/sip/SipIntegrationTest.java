@@ -91,13 +91,14 @@ class SipIntegrationTest {
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
         String callId = "test-call-" + UUID.randomUUID();
 
-        String sdpOffer =
-                "v=0\r\n" +
-                "o=Alice 1000 1000 IN IP4 127.0.0.1\r\n" +
-                "s=Offer\r\n" +
-                "c=IN IP4 127.0.0.1\r\n" +
-                "t=0 0\r\n" +
-                "m=audio 30000 RTP/AVP 0\r\n";
+        String sdpOffer = """
+                v=0
+                o=Alice 1000 1000 IN IP4 127.0.0.1
+                s=Offer
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 30000 RTP/AVP 0
+                """.replace("\n", "\r\n");
 
         SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
                 .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
@@ -156,13 +157,14 @@ class SipIntegrationTest {
 
         try (DatagramSocket rtpReceiver = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
             rtpReceiver.setSoTimeout(3000);
-            String sdpOffer =
-                    "v=0\r\n" +
-                            "o=Alice 1010 1010 IN IP4 127.0.0.1\r\n" +
-                            "s=Offer\r\n" +
-                            "c=IN IP4 127.0.0.1\r\n" +
-                            "t=0 0\r\n" +
-                            "m=audio " + rtpReceiver.getLocalPort() + " RTP/AVP 0\r\n";
+            String sdpOffer = """
+                    v=0
+                    o=Alice 1010 1010 IN IP4 127.0.0.1
+                    s=Offer
+                    c=IN IP4 127.0.0.1
+                    t=0 0
+                    m=audio %d RTP/AVP 0
+                    """.formatted(rtpReceiver.getLocalPort()).replace("\n", "\r\n");
 
             SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
                     .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
@@ -198,13 +200,14 @@ class SipIntegrationTest {
 
         try (DatagramSocket rtpReceiver = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
             rtpReceiver.setSoTimeout(3000);
-            String sdpOffer =
-                    "v=0\r\n" +
-                            "o=Alice 1020 1020 IN IP4 127.0.0.1\r\n" +
-                            "s=Offer\r\n" +
-                            "c=IN IP4 127.0.0.1\r\n" +
-                            "t=0 0\r\n" +
-                            "m=audio " + rtpReceiver.getLocalPort() + " RTP/AVP 0\r\n";
+            String sdpOffer = """
+                    v=0
+                    o=Alice 1020 1020 IN IP4 127.0.0.1
+                    s=Offer
+                    c=IN IP4 127.0.0.1
+                    t=0 0
+                    m=audio %d RTP/AVP 0
+                    """.formatted(rtpReceiver.getLocalPort()).replace("\n", "\r\n");
 
             SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
                     .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
@@ -273,15 +276,16 @@ class SipIntegrationTest {
         String sdpOfferFromServer = ok.getBodyAsString();
         assertTrue(sdpOfferFromServer.contains("m=audio"), "Server should include SDP offer in 200 OK");
 
-        String ackSdpAnswer =
-                "v=0\r\n" +
-                "o=Alice 1001 1001 IN IP4 127.0.0.1\r\n" +
-                "s=Answer\r\n" +
-                "c=IN IP4 127.0.0.1\r\n" +
-                "t=0 0\r\n" +
-                "m=audio 30002 RTP/AVP 0\r\n" +
-                "a=rtpmap:0 PCMU/8000\r\n" +
-                "a=recvonly\r\n";
+        String ackSdpAnswer = """
+                v=0
+                o=Alice 1001 1001 IN IP4 127.0.0.1
+                s=Answer
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 30002 RTP/AVP 0
+                a=rtpmap:0 PCMU/8000
+                a=recvonly
+                """.replace("\n", "\r\n");
         client.sendAck(inviteWithoutOffer, ok, serverAddress, ackSdpAnswer, "application/sdp")
                 .block(Duration.ofSeconds(2));
 
@@ -383,13 +387,14 @@ class SipIntegrationTest {
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
         String callId = "test-dtmf-call-" + UUID.randomUUID();
 
-        String sdpOffer =
-                "v=0\r\n" +
-                "o=Alice 1000 1000 IN IP4 127.0.0.1\r\n" +
-                "s=Offer\r\n" +
-                "c=IN IP4 127.0.0.1\r\n" +
-                "t=0 0\r\n" +
-                "m=audio 30000 RTP/AVP 0\r\n";
+        String sdpOffer = """
+                v=0
+                o=Alice 1000 1000 IN IP4 127.0.0.1
+                s=Offer
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 30000 RTP/AVP 0
+                """.replace("\n", "\r\n");
 
         SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:bob@127.0.0.1:" + server.getPort())
                 .from("<sip:alice@127.0.0.1>;tag=dtmf-alice")

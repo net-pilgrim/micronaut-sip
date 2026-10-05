@@ -65,7 +65,12 @@ class SipMessageDtmfTest {
                 .from("<sip:alice@127.0.0.1>")
                 .to("<sip:bob@127.0.0.1>")
                 .contentType("application/sdp")
-                .body("v=0\r\no=alice 100 100 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n")
+                .body("""
+                        v=0
+                        o=alice 100 100 IN IP4 127.0.0.1
+                        s=-
+                        t=0 0
+                        """.replace("\n", "\r\n"))
                 .build();
 
         assertFalse(request.isDtmf());

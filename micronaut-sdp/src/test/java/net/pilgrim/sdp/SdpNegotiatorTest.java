@@ -16,16 +16,17 @@ class SdpNegotiatorTest {
 
     @Test
     void parsesAudioOfferWithDirectionAndFormats() {
-        String offer =
-                "v=0\r\n" +
-                        "o=Alice 1000 1000 IN IP4 127.0.0.1\r\n" +
-                        "s=Offer\r\n" +
-                        "c=IN IP4 127.0.0.1\r\n" +
-                        "t=0 0\r\n" +
-                        "m=audio 30000 RTP/AVP 0 8\r\n" +
-                        "a=rtpmap:0 PCMU/8000\r\n" +
-                        "a=rtpmap:8 PCMA/8000\r\n" +
-                        "a=sendonly\r\n";
+        String offer = """
+                v=0
+                o=Alice 1000 1000 IN IP4 127.0.0.1
+                s=Offer
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 30000 RTP/AVP 0 8
+                a=rtpmap:0 PCMU/8000
+                a=rtpmap:8 PCMA/8000
+                a=sendonly
+                """.replace("\n", "\r\n");
 
         SdpMessage parsed = parser.parse(offer);
         assertEquals("0", parsed.getVersion());
@@ -40,16 +41,17 @@ class SdpNegotiatorTest {
 
     @Test
     void createsAnswerWithInverseDirectionAndSharedCodec() {
-        String offer =
-                "v=0\r\n" +
-                        "o=Alice 1000 1000 IN IP4 127.0.0.1\r\n" +
-                        "s=Offer\r\n" +
-                        "c=IN IP4 127.0.0.1\r\n" +
-                        "t=0 0\r\n" +
-                        "m=audio 30000 RTP/AVP 8 0\r\n" +
-                        "a=rtpmap:8 PCMA/8000\r\n" +
-                        "a=rtpmap:0 PCMU/8000\r\n" +
-                        "a=sendonly\r\n";
+        String offer = """
+                v=0
+                o=Alice 1000 1000 IN IP4 127.0.0.1
+                s=Offer
+                c=IN IP4 127.0.0.1
+                t=0 0
+                m=audio 30000 RTP/AVP 8 0
+                a=rtpmap:8 PCMA/8000
+                a=rtpmap:0 PCMU/8000
+                a=sendonly
+                """.replace("\n", "\r\n");
 
         String answer = negotiator.createAnswer(offer);
         SdpMessage parsedAnswer = parser.parse(answer);

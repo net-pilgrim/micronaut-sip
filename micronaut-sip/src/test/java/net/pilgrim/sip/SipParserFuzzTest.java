@@ -108,15 +108,20 @@ public class SipParserFuzzTest {
 
     @Test
     void testValidRequestWithBodyAndFoldedHeaders() {
-        String raw = "INVITE sip:bob@biloxi.com SIP/2.0\r\n" +
-                "Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-776\r\n" +
-                "From: Alice <sip:alice@atlanta.com>;\r\n tag=1928301774\r\n" + // Folded header
-                "To: Bob <sip:bob@biloxi.com>\r\n" +
-                "Call-ID: a84b4c76e66710\r\n" +
-                "CSeq: 314159 INVITE\r\n" +
-                "Content-Type: application/sdp\r\n" +
-                "Content-Length: 14\r\n\r\n" +
-                "v=0\r\no=alice\r\n";
+        String raw = """
+                INVITE sip:bob@biloxi.com SIP/2.0
+                Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-776
+                From: Alice <sip:alice@atlanta.com>;
+                 tag=1928301774
+                To: Bob <sip:bob@biloxi.com>
+                Call-ID: a84b4c76e66710
+                CSeq: 314159 INVITE
+                Content-Type: application/sdp
+                Content-Length: 14
+
+                v=0
+                o=alice
+                """.replace("\n", "\r\n");
 
         SipMessage msg = parser.parse(raw);
         assertTrue(msg.isRequest());
@@ -132,13 +137,16 @@ public class SipParserFuzzTest {
 
     @Test
     void testValidResponseParsing() {
-        String raw = "SIP/2.0 487 Request Terminated\r\n" +
-                "Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-776\r\n" +
-                "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n" +
-                "To: Bob <sip:bob@biloxi.com>;tag=998877\r\n" +
-                "Call-ID: a84b4c76e66710\r\n" +
-                "CSeq: 314159 INVITE\r\n" +
-                "Content-Length: 0\r\n\r\n";
+        String raw = """
+                SIP/2.0 487 Request Terminated
+                Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-776
+                From: Alice <sip:alice@atlanta.com>;tag=1928301774
+                To: Bob <sip:bob@biloxi.com>;tag=998877
+                Call-ID: a84b4c76e66710
+                CSeq: 314159 INVITE
+                Content-Length: 0
+
+                """.replace("\n", "\r\n");
 
         SipMessage msg = parser.parse(raw);
         assertFalse(msg.isRequest());
