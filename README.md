@@ -156,7 +156,7 @@ See the [RFC compliance matrix](doc/COMPLIANCE.md) for implemented standards and
 ## Examples & Call Flows
 
 - See [doc/EXAMPLES.md](doc/EXAMPLES.md) for SIP controller and reactive filter examples.
-- See [micronaut-netann.md](micronaut-netann.md) for RFC 4240 NetAnn announcement service architecture, parameter specs, and detailed call flows with sequence diagrams.
+- See [doc/MICRONAUT-NETANN.md](doc/MICRONAUT-NETANN.md) for RFC 4240 NetAnn announcement service architecture, parameter specs, and detailed call flows with sequence diagrams.
 
 ---
 
