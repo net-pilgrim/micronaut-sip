@@ -90,62 +90,69 @@ A comprehensive **1-hour continuous stress and stability benchmark** was conduct
 - **Test Duration**: **3,601.98 seconds** (1 hour, 1.98 seconds)
 - **Aggregate RTP Throughput**: **5,000 RTP datagrams/second** (~18,000,000 RTP audio packets streamed total)
 
-#### Benchmark Results
+##### Comparison Table: JVM vs GraalVM Native (1-Hour Continuous Load)
 
-| Metric | Measured Value | Target / SLA | Status |
-| :--- | :--- | :--- | :---: |
-| **Total Calls Attempted** | **180,000** | 180,000 (1 hour @ 50 cps) | **100% Target Met** |
-| **Successful Calls** | **180,000** | 180,000 | **PASS** |
-| **Failed Calls** | **0** | 0 | **PASS (0.00%)** |
-| **Call Success Rate** | **100.00%** | > 99.99% | **PASS** |
-| **SIP Retransmissions** | **0** | 0 | **PASS** |
-| **SIP Timeouts** | **0** | 0 | **PASS** |
-| **Unexpected Messages** | **0** | 0 | **PASS** |
-| **Average Concurrency** | **98.8 concurrent calls** | ~100 concurrent calls | **Optimal** |
-| **Peak Concurrency** | **102 concurrent calls** | Max 130 cap | **Optimal** |
-| **Average Call Rate** | **49.972 cps** | 50.0 cps | **Optimal** |
+| Metric | JVM (Zulu JDK 25) | GraalVM Native Image | Native Delta / Improvement |
+| :--- | :--- | :--- | :--- |
+| **Calls Attempted / Completed** | 180,000 / 180,000 | 180,000 / 180,000 | 100% Target Met |
+| **Call Success Rate** | **100.00%** (0 failed) | **100.00%** (0 failed) | **Zero loss / drops** |
+| **Initial Idle Memory (RSS)** | `219.5 MB` | `51.5 MB` | **~76% lower** 📉 |
+| **Average Memory Under Load (RSS)** | `1,275.8 MB` | `445.3 MB` | **~65% lower** 📉 |
+| **Peak Memory Under Load (RSS)** | `1,300.7 MB` | `694.6 MB` | **~47% lower** 📉 |
+| **Post-Test Memory (Idle RSS)** | `1,300.7 MB` | `531.9 MB` | **~59% lower** 📉 |
+| **Baseline File Descriptors** | `117` | `70` | **47 fewer FDs** |
+| **Peak File Descriptors** | `219` | `173` | **46 fewer FDs** |
+| **Post-Load File Descriptors** | `119` (baseline recovery) | `72` (baseline recovery) | **Zero socket / FD leak** |
+| **Average Concurrency** | `98.8 concurrent calls` | `98.6 concurrent calls` | **Optimal (~100 active dialogs)** |
+| **Sustained Call Rate** | `49.972 cps` | `49.972 cps` | **180k calls in 3,601.98s** |
+| **Sub-10ms Response Rate** | `99.99%` | `99.53%` (179,155 calls) | **Sub-10ms response** |
 
 #### Latency & Response Time Distribution
 
 Response time measures the interval from initial `INVITE` transmission to receipt of `200 OK` (encompassing Request-URI parameter parsing, audio prompt lookup/generation, RTP socket reservation, and SDP answer generation):
 
-| Response Time Bracket | Call Count | Percentage |
-| :--- | :---: | :---: |
-| **$0\text{ ms} \le t < 10\text{ ms}$** | **179,982** | **99.990%** |
-| **$10\text{ ms} \le t < 20\text{ ms}$** | **17** | **0.009%** |
-| **$20\text{ ms} \le t < 30\text{ ms}$** | **0** | **0.000%** |
-| **$30\text{ ms} \le t < 40\text{ ms}$** | **1** | **0.001%** |
-| **$t \ge 40\text{ ms}$** | **0** | **0.000%** |
+| Response Time Bracket | JVM Call Count | Native Call Count | Native Percentage |
+| :--- | :---: | :---: | :---: |
+| **$0\text{ ms} \le t < 10\text{ ms}$** | **179,982** | **179,155** | **99.531%** |
+| **$10\text{ ms} \le t < 20\text{ ms}$** | **17** | **358** | **0.199%** |
+| **$20\text{ ms} \le t < 30\text{ ms}$** | **0** | **228** | **0.127%** |
+| **$30\text{ ms} \le t < 40\text{ ms}$** | **1** | **146** | **0.081%** |
+| **$40\text{ ms} \le t < 50\text{ ms}$** | **0** | **36** | **0.020%** |
+| **$50\text{ ms} \le t < 100\text{ ms}$** | **0** | **51** | **0.028%** |
+| **$100\text{ ms} \le t < 150\text{ ms}$** | **0** | **23** | **0.013%** |
+| **$150\text{ ms} \le t < 200\text{ ms}$** | **0** | **3** | **0.002%** |
+| **$t \ge 200\text{ ms}$** | **0** | **0** | **0.000%** |
 
-- **Sub-10ms Response Rate**: **99.99%** of all 180,000 calls established their dialog and media session in under 10 ms.
-- **Max Recorded Response Time**: **38 ms** (no timeouts, zero dropped transactions).
+- **Sub-10ms Response Rate**: Over **99.5%** of all 180,000 calls established their dialog and media session in under 10 ms.
+- **Max Recorded Response Time**: Sub-200ms across all 180,000 calls (zero timeouts, zero dropped transactions).
 
 #### Memory & File Descriptor Stability (Zero Leak Verification)
 
 Telemetry was recorded at 10-second intervals throughout the 1-hour run:
 
-| Elapsed Time | NetAnn JVM RSS | NetAnn Active FDs | Active Concurrency | Cumulative Success |
-| :--- | :---: | :---: | :---: | :---: |
-| **0 min (Start)** | 219.5 MB | 117 | 0 | 0 |
-| **10 min (600s)** | 1,295.39 MB | 218 | 99 | 29,406 |
-| **20 min (1,200s)**| 1,297.57 MB | 218 | 100 | 59,409 |
-| **30 min (1,800s)**| 1,299.04 MB | 218 | 99 | 89,414 |
-| **40 min (2,400s)**| 1,299.89 MB | 218 | 99 | 119,419 |
-| **50 min (3,000s)**| 1,300.30 MB | 218 | 99 | 149,424 |
-| **60 min (3,600s)**| 1,300.66 MB | 203 | 100 | 179,428 |
-| **Post-Test (Idle)**| 1,300.66 MB | 119 | 0 | 180,000 |
+| Elapsed Time | NetAnn JVM RSS | NetAnn Native RSS | Native FDs | Active Concurrency | Cumulative Success |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **0 min (Start)** | 219.5 MB | 51.5 MB | 70 | 0 | 0 |
+| **10 min (600s)** | 1,295.4 MB | 476.6 MB | 171 | 99 | 29,405 |
+| **20 min (1,200s)**| 1,297.6 MB | 476.9 MB | 171 | 99 | 59,410 |
+| **30 min (1,800s)**| 1,299.0 MB | 465.0 MB | 171 | 99 | 89,414 |
+| **40 min (2,400s)**| 1,299.9 MB | 487.7 MB | 171 | 99 | 119,419 |
+| **50 min (3,000s)**| 1,300.3 MB | 570.2 MB | 171 | 99 | 149,423 |
+| **60 min (3,600s)**| 1,300.7 MB | 531.9 MB | 157 | 99 | 179,428 |
+| **Post-Test (Idle)**| 1,300.7 MB | 531.9 MB | 72 | 0 | 180,000 |
 
 > [!NOTE]
-> - **Zero Memory Leaks**: Following initial JVM heap warm-up to its configured initial heap (`-Xms1g`), resident memory stabilized completely flat at **~1.30 GB**. Memory grew by only **5.27 MB total over the final 50 minutes** across 150,000 calls ($0.035\text{ KB/call}$).
-> - **Zero File Descriptor / Socket Leaks**: Active file descriptors increased from 117 to 218 during load (representing the ~100 active UDP RTP media sockets + 1 SIP socket) and immediately returned to baseline (119) upon completion of the test.
+> - **Substantial Memory Reduction**: GraalVM Native Image sustained the continuous 100-concurrency workload with an average RSS of **445.3 MB** compared to **1,275.8 MB** for JVM Zulu 25 (**~65% lower memory footprint**).
+> - **Zero File Descriptor / Socket Leaks**: Active file descriptors increased from 70 to 173 during load (representing the ~100 active UDP RTP media sockets + 1 SIP socket) and immediately returned to baseline (72) upon completion of the test.
 
 #### 1-Hour Memory Profile Chart
 ```mermaid
 xychart-beta
-    title "1-Hour Sustained Load: NetAnn JVM Memory Stability (RSS in MB)"
+    title "1-Hour Sustained Load: NetAnn Memory Usage (RSS in MB)"
     x-axis ["0m", "10m", "20m", "30m", "40m", "50m", "60m"]
     y-axis "Memory (MB)" 0 --> 1500
-    line "NetAnn JVM RSS (MB)" [220, 1295, 1298, 1299, 1300, 1300, 1301]
+    line "JVM (Zulu JDK 25)" [220, 1295, 1298, 1299, 1300, 1300, 1301]
+    line "GraalVM Native Image" [52, 477, 477, 465, 488, 570, 532]
 ```
 
 ### Running SIPp Benchmarks

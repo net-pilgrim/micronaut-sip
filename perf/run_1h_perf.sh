@@ -3,22 +3,38 @@ set -euo pipefail
 
 cd /home/dsv/work/sip
 
-echo "=== Preparing 1-Hour Performance Test ==="
+TARGET="${1:-native}"
+
+echo "=== Preparing 1-Hour Performance Test (Target: $TARGET) ==="
 ulimit -n 65535
 echo "File descriptor limit: $(ulimit -n)"
 
 # Ensure clean logs directory
 mkdir -p perf
-rm -f perf/perf_metrics.csv perf/sipp_stats.csv perf/sipp_errors.log perf/sipp_screen.log perf/netann.log
+rm -f perf/perf_metrics.csv perf/sipp_stats.csv perf/sipp_errors.log perf/sipp_screen.log perf/netann.log perf/sipp_out.log
 
-export JAVA_HOME=/home/dsv/.sdkman/candidates/java/25.0.2-zulu
-export PATH=$JAVA_HOME/bin:$PATH
 export LOG_LEVEL=WARN
-export JAVA_OPTS="-Xms1g -Xmx4g"
 
-echo "=== Starting NetAnn Server ==="
-micronaut-netann/build/install/micronaut-netann/bin/micronaut-netann > perf/netann.log 2>&1 &
-SERVER_PID=$!
+if [ "$TARGET" = "native" ]; then
+    echo "=== Starting NetAnn Server (GraalVM Native Image) ==="
+    if [ ! -f "micronaut-netann/build/native/nativeCompile/micronaut-netann" ]; then
+        echo "Error: Native executable micronaut-netann/build/native/nativeCompile/micronaut-netann not found!"
+        exit 1
+    fi
+    ./micronaut-netann/build/native/nativeCompile/micronaut-netann > perf/netann.log 2>&1 &
+    SERVER_PID=$!
+elif [ "$TARGET" = "jvm" ]; then
+    echo "=== Starting NetAnn Server (JVM Zulu 25) ==="
+    export JAVA_HOME=/home/dsv/.sdkman/candidates/java/25.0.2-zulu
+    export PATH=$JAVA_HOME/bin:$PATH
+    export JAVA_OPTS="-Xms1g -Xmx4g"
+    micronaut-netann/build/install/micronaut-netann/bin/micronaut-netann > perf/netann.log 2>&1 &
+    SERVER_PID=$!
+else
+    echo "Unknown target: $TARGET. Use 'native' or 'jvm'."
+    exit 1
+fi
+
 echo "NetAnn server started with PID: $SERVER_PID"
 
 # Wait for server to be healthy
@@ -64,6 +80,7 @@ python3 perf/monitor.py "$SERVER_PID" "$SIPP_PID" 3630
 
 echo "=== Test Completed. Shutting down... ==="
 wait "$SIPP_PID" 2>/dev/null || true
+mv -f uac_annc_server_bye_*_rtt.csv perf/ 2>/dev/null || true
 
 # Check if NetAnn server is still alive
 if kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -74,3 +91,4 @@ if kill -0 "$SERVER_PID" 2>/dev/null; then
 fi
 
 echo "=== Performance Test Finished Successfully ==="
+python3 perf/analyze_results.py
