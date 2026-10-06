@@ -125,7 +125,7 @@ sequenceDiagram
     participant Client as SIP Caller / Gateway
     participant Server as "NetAnn Server (micronaut-netann)"
     
-    Client->>Server: INVITE sip:annc@ms.example.net;play=tone:440 SIP/2.0 (with SDP Offer)
+    Client->>Server: "INVITE sip:annc@ms.example.net;play=tone:440 SIP/2.0 (with SDP Offer)"
     Server-->>Client: 100 Trying (optional)
     Server->>Server: Parse play=tone:440, synthesize 8kHz PCM audio, allocate RTP port (e.g. 10002)
     Server-->>Client: 200 OK (with SDP Answer, To-tag, Contact)
@@ -136,8 +136,8 @@ sequenceDiagram
         Server->>Client: RTP Packet (PT=0 PCMU, Seq=1..N, TS=0, 160, 320...)
     end
     
-    Server->>Server: Audio finished playing; trigger completion callback
-    Server->>Client: BYE sip:caller@127.0.0.1:5060;tag=clientTag SIP/2.0
+    Server->>Server: "Audio finished playing; trigger completion callback"
+    Server->>Client: "BYE sip:caller@127.0.0.1:5060;tag=clientTag SIP/2.0"
     Client-->>Server: 200 OK
     Server->>Server: Release RTP port pair, terminate dialog session
 ```
@@ -243,7 +243,7 @@ sequenceDiagram
     participant Client as SIP Caller / Gateway
     participant Server as "NetAnn Server (micronaut-netann)"
     
-    Client->>Server: INVITE sip:annc@...;play=classpath:prompts/welcome.wav
+    Client->>Server: "INVITE sip:annc@...;play=classpath:prompts/welcome.wav"
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     Server->>Client: RTP Streaming (20ms packets)
@@ -265,7 +265,7 @@ sequenceDiagram
     participant Client as SIP Caller / Gateway
     participant Server as "NetAnn Server (micronaut-netann)"
     
-    Client->>Server: INVITE sip:annc@...;play=tone:440
+    Client->>Server: "INVITE sip:annc@...;play=tone:440"
     Server-->>Client: 180 Ringing (Provisional)
     Client->>Server: CANCEL sip:annc@... SIP/2.0
     Server->>Server: Match pending transaction via Via branch & Call-ID
@@ -288,7 +288,7 @@ sequenceDiagram
     participant Client as SIP Caller
     participant Server as NetAnn Server
     
-    Client->>Server: INVITE ...;play=tone:440,500;repeat=3;delay=1000
+    Client->>Server: "INVITE ...;play=tone:440,500;repeat=3;delay=1000"
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
@@ -321,7 +321,7 @@ sequenceDiagram
     participant Client as SIP Caller
     participant Server as NetAnn Server
     
-    Client->>Server: INVITE ...;play=tone:440,1000;repeat=forever;delay=500
+    Client->>Server: "INVITE ...;play=tone:440,1000;repeat=forever;delay=500"
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
@@ -347,7 +347,7 @@ sequenceDiagram
     participant Client as SIP Caller
     participant Server as NetAnn Server
     
-    Client->>Server: INVITE ...;play=tone:440,1000;repeat=forever;duration=3000
+    Client->>Server: "INVITE ...;play=tone:440,1000;repeat=forever;duration=3000"
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
@@ -458,7 +458,7 @@ sequenceDiagram
     participant Server as NetAnn Server
     
     Note over Client,Server: Establish TCP Connection on Port 5060
-    Client->>Server: [TCP] INVITE sip:annc@...;play=tone:440;transport=tcp
+    Client->>Server: "[TCP] INVITE sip:annc@...;play=tone:440;transport=tcp"
     Server-->>Client: [TCP] 200 OK (SDP Answer with audio port 10002)
     Client->>Server: [TCP] ACK
     
