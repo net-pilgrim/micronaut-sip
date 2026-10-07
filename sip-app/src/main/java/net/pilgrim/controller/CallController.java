@@ -81,6 +81,9 @@ public class CallController {
     }
 
     public int resolveServerPort(SipRequest request) {
+        if (sipServer != null && sipServer.getTransportRegistry() != null) {
+            return sipServer.getTransportRegistry().resolveServerPort(request, serverConfig);
+        }
         boolean isTcp = request != null && request.getTransport() == SipTransport.TCP;
         if (isTcp) {
             return sipServer != null ? sipServer.getTcpPort()
@@ -94,6 +97,9 @@ public class CallController {
     public String buildContactUri(SipRequest request) {
         String advertisedIp = resolveAdvertisedIp();
         int serverPort = resolveServerPort(request);
+        if (sipServer != null && sipServer.getTransportRegistry() != null) {
+            return sipServer.getTransportRegistry().formatContactUri(request, advertisedIp, serverPort);
+        }
         boolean isTcp = request != null && request.getTransport() == SipTransport.TCP;
         return "<sip:" + advertisedIp + ":" + serverPort + (isTcp ? ";transport=tcp" : "") + ">";
     }
@@ -116,9 +122,9 @@ public class CallController {
             LOG.info("Received SDP offer ({} bytes)", sdpOffer.length());
         }
 
-        session.setState(SipSession.State.EARLY);
-        session.setAttribute("sdpOffer", sdpOffer);
-        session.setAttribute("awaitingAckSdpAnswer", false);
+        if (session != null) {
+            session.handleInvite(request, sdpOffer);
+        }
 
         int localAudioPort = 49170;
         try {
@@ -130,6 +136,9 @@ public class CallController {
 
         // 180 Ringing provisional response
         SipResponse ringing = SipResponse.ringing(request);
+        if (session != null) {
+            session.handleProvisional(ringing);
+        }
         String advertisedIp = resolveAdvertisedIp();
         String contactUri = buildContactUri(request);
 
@@ -143,10 +152,12 @@ public class CallController {
             ringing.getHeaders().setRSeq(1);
             ringing.getHeaders().setContact(contactUri);
             if (session != null) {
+                prackSink = Sinks.one();
+                session.getReliableContext().initiate(1L, request.getCSeqNumber(),
+                        request.getMethod() != null ? request.getMethod().name() : "INVITE", prackSink);
                 session.setAttribute("rseq", 1L);
                 session.setAttribute("cseqNumber", request.getCSeqNumber());
                 session.setAttribute("cseqMethod", request.getMethod() != null ? request.getMethod().name() : "INVITE");
-                prackSink = Sinks.one();
                 session.setAttribute("prackSink", prackSink);
             }
         }
@@ -155,12 +166,18 @@ public class CallController {
         SipResponse ok;
         if (sdpOffer != null && !sdpOffer.isBlank()) {
             String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
-            session.setAttribute("sdpAnswer", answer);
+            if (session != null) {
+                session.setAttribute("sdpAnswer", answer);
+            }
             ok = SipResponse.ok(request, answer, "application/sdp");
         } else {
-            session.setAttribute("awaitingAckSdpAnswer", true);
+            if (session != null) {
+                session.setAttribute("awaitingAckSdpAnswer", true);
+            }
             String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
-            session.setAttribute("localSdpOffer", localOffer);
+            if (session != null) {
+                session.setAttribute("localSdpOffer", localOffer);
+            }
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
         ok.getHeaders().setContact(contactUri);
@@ -202,9 +219,10 @@ public class CallController {
                                           @SipBody String sdpOffer,
                                           SipSession session) {
         LOG.info("Received slow INVITE for Call-ID: {}, delaying 350ms to trigger auto 100 Trying", callId);
-        session.setState(SipSession.State.EARLY);
-        session.setAttribute("sdpOffer", sdpOffer);
-        session.setAttribute("awaitingAckSdpAnswer", false);
+        if (session != null) {
+            session.handleInvite(request, sdpOffer);
+            session.setState(SipSession.State.EARLY);
+        }
 
         int localAudioPort = 49170;
         try {
@@ -220,12 +238,18 @@ public class CallController {
         SipResponse ok;
         if (sdpOffer != null && !sdpOffer.isBlank()) {
             String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
-            session.setAttribute("sdpAnswer", answer);
+            if (session != null) {
+                session.setAttribute("sdpAnswer", answer);
+            }
             ok = SipResponse.ok(request, answer, "application/sdp");
         } else {
-            session.setAttribute("awaitingAckSdpAnswer", true);
+            if (session != null) {
+                session.setAttribute("awaitingAckSdpAnswer", true);
+            }
             String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
-            session.setAttribute("localSdpOffer", localOffer);
+            if (session != null) {
+                session.setAttribute("localSdpOffer", localOffer);
+            }
             ok = SipResponse.ok(request, localOffer, "application/sdp");
         }
         ok.getHeaders().setContact(contactUri);
@@ -241,29 +265,19 @@ public class CallController {
                       @SipCallId String callId,
                       @SipBody String ackSdpAnswer,
                       SipSession session) {
-        if (session != null && session.getState() == SipSession.State.TERMINATED) {
+        if (session != null && session.isTerminated()) {
             LOG.info("Received ACK for terminated Call-ID: {}, ignoring state change.", callId);
             return;
         }
         if (session != null) {
-            Boolean awaitingAckSdpAnswer = session.getAttribute("awaitingAckSdpAnswer");
-            if (Boolean.TRUE.equals(awaitingAckSdpAnswer)) {
-                String contentType = request.getContentType();
-                if (contentType != null && contentType.equalsIgnoreCase("application/sdp")
-                        && ackSdpAnswer != null && !ackSdpAnswer.isBlank()) {
-                    session.setAttribute("sdpAnswer", ackSdpAnswer);
-                    session.setAttribute("awaitingAckSdpAnswer", false);
-                    LOG.info("Received SDP answer in ACK for Call-ID: {} ({} bytes).", callId, ackSdpAnswer.length());
-                } else {
-                    LOG.warn("Expected SDP answer in ACK for Call-ID: {}, but none was provided.", callId);
-                }
+            var transition = session.handleAck(request, ackSdpAnswer);
+            if (transition.isConfirmed()) {
+                LOG.info("Received ACK for Call-ID: {}, call session is now CONFIRMED.", callId);
+                maybeSendRtpProbe(callId, session);
             }
+        } else {
+            LOG.info("Received ACK for Call-ID: {} (no session).", callId);
         }
-        LOG.info("Received ACK for Call-ID: {}, call session is now CONFIRMED.", callId);
-        if (session != null) {
-            session.setState(SipSession.State.CONFIRMED);
-        }
-        maybeSendRtpProbe(callId, session);
     }
 
     /**
@@ -275,7 +289,9 @@ public class CallController {
                                    @SipCallId String callId,
                                    SipSession session) {
         LOG.info("Received BYE for Call-ID: {}, terminating session.", callId);
-        session.setState(SipSession.State.TERMINATED);
+        if (session != null) {
+            session.handleBye(request);
+        }
         rtpMediaManager.terminateSession(callId);
         return Mono.just(SipResponse.ok(request));
     }
@@ -289,7 +305,7 @@ public class CallController {
                          SipSession session) {
         LOG.info("Received CANCEL for Call-ID: {}, terminating session.", callId);
         if (session != null) {
-            session.setState(SipSession.State.TERMINATED);
+            session.handleCancel(request);
         }
         rtpMediaManager.terminateSession(callId);
     }
@@ -328,35 +344,15 @@ public class CallController {
                                      @SipBody(required = false) String prackBody,
                                      SipSession session) {
         LOG.info("Received PRACK for Call-ID: {} with RAck: {}", callId, rack);
-        if (session == null || session.getState() == SipSession.State.TERMINATED) {
+        if (session == null || session.isTerminated()) {
             LOG.warn("Received PRACK for non-existent or terminated session Call-ID: {}", callId);
             return Mono.just(SipResponse.transactionDoesNotExist(request));
         }
 
-        if (rack != null && !rack.isBlank()) {
-            String[] parts = rack.trim().split("\\s+");
-            if (parts.length >= 2) {
-                try {
-                    long prackRSeq = Long.parseLong(parts[0]);
-                    Long sessionRSeq = session.getAttribute("rseq");
-                    if (sessionRSeq != null && sessionRSeq != prackRSeq) {
-                        LOG.warn("PRACK RSeq mismatch for Call-ID: {}: expected {}, received {}",
-                                callId, sessionRSeq, prackRSeq);
-                        return Mono.just(SipResponse.transactionDoesNotExist(request));
-                    }
-                } catch (NumberFormatException ignored) {}
-            }
-        }
-
-        if (request.getContentType() != null && request.getContentType().equalsIgnoreCase("application/sdp")
-                && prackBody != null && !prackBody.isBlank()) {
-            session.setAttribute("sdpAnswer", prackBody);
-            LOG.info("Received SDP answer in PRACK for Call-ID: {} ({} bytes)", callId, prackBody.length());
-        }
-
-        Sinks.One<Void> prackSink = session.getAttribute("prackSink");
-        if (prackSink != null) {
-            prackSink.tryEmitEmpty();
+        var transition = session.handlePrack(request, rack, prackBody);
+        if (transition.isRejected()) {
+            LOG.warn("PRACK RAck mismatch or rejected for Call-ID: {}: {}", callId, transition.message());
+            return Mono.just(SipResponse.transactionDoesNotExist(request));
         }
 
         return Mono.just(SipResponse.ok(request));

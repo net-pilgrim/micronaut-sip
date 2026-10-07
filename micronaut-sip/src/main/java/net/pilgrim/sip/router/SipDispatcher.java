@@ -777,18 +777,20 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                     PendingReliableProvisional pendingRel = pendingReliableResponses.remove(request.getCallId());
                     if (pendingRel != null) pendingRel.cancel();
 
-                    // Timer J: Cache final response for non-INVITE server transactions over UDP (RFC 3261 §17.2.2)
+                    boolean isReliable = request.getTransport() != null && request.getTransport().isReliable();
+
+                    // Timer J: Cache final response for non-INVITE server transactions over unreliable transport (RFC 3261 §17.2.2)
                     if (request.getMethod() != SipMethod.INVITE && request.getMethod() != SipMethod.ACK
-                            && request.getTransport() != SipTransport.TCP && configuration.getTimerJDelayMs() > 0) {
+                            && !isReliable && configuration.getTimerJDelayMs() > 0) {
                         String txKey = resolveServerTransactionKey(request);
                         nonInviteResponseCache.put(txKey, resp);
                         Mono.delay(Duration.ofMillis(configuration.getTimerJDelayMs()), Schedulers.parallel())
                                 .subscribe(tick -> nonInviteResponseCache.remove(txKey));
                     }
 
-                    // Timer G & H: Retransmit 2xx final response for INVITE on UDP until ACK (RFC 3261 §13.3.1.4)
+                    // Timer G & H: Retransmit 2xx final response for INVITE on unreliable transport until ACK (RFC 3261 §13.3.1.4)
                     if (request.getMethod() == SipMethod.INVITE && resp.getStatusCode() >= 200 && resp.getStatusCode() < 300
-                            && configuration.isUas2xxRetransmitEnabled() && request.getTransport() != SipTransport.TCP) {
+                            && configuration.isUas2xxRetransmitEnabled() && !isReliable) {
                         startTimerGAndH(request, resp, originalSender);
                     }
 
@@ -806,7 +808,7 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                         if (activeTx != null) {
                             activeTx.setLastProvisionalResponse(resp);
                         }
-                        // RFC 3262: Retransmit reliable provisional responses over UDP until PRACK
+                        // RFC 3262: Retransmit reliable provisional responses over unreliable transport until PRACK
                         if (resp.getStatusCode() > 100 && resp.getStatusCode() < 200
                                 && (resp.getHeaders().contains(SipHeaders.RSEQ)
                                     || resp.getHeaders().containsToken(SipHeaders.REQUIRE, "100rel"))) {
@@ -817,7 +819,8 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                                     rseq = Long.parseLong(rseqStr.trim());
                                 } catch (NumberFormatException ignored) {}
                             }
-                            if (request.getTransport() != SipTransport.TCP && configuration.isUas100relRetransmitEnabled()) {
+                            boolean isReliable = request.getTransport() != null && request.getTransport().isReliable();
+                            if (!isReliable && configuration.isUas100relRetransmitEnabled()) {
                                 startReliableProvisionalRetransmission(request, resp, rseq, originalSender);
                             } else {
                                 PendingReliableProvisional pending = new PendingReliableProvisional(

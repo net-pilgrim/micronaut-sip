@@ -136,21 +136,37 @@ public class AnnouncementController {
                             ? sdpNegotiator.createAnswer(sdpOffer, localAudioPort, advertisedIp)
                             : sdpNegotiator.createOffer(localAudioPort, advertisedIp);
 
-                    session.setState(SipSession.State.EARLY);
-                    session.setAttribute("anncParams", params);
-                    session.setAttribute("pcmAudio", pcmAudio);
-                    session.setAttribute("sdpOffer", sdpOffer);
-                    session.setAttribute("originalInvite", request);
+                    if (session != null) {
+                        session.handleInvite(request, sdpOffer);
+                        session.setState(SipSession.State.EARLY);
+                        session.setAttribute("anncParams", params);
+                        session.setAttribute("pcmAudio", pcmAudio);
+                        session.setAttribute("sdpOffer", sdpOffer);
+                        session.setAttribute("originalInvite", request);
+                    }
 
-                    int serverPort = (request.getTransport() == SipTransport.TCP)
-                            ? (sipServer != null ? sipServer.getTcpPort() : 5060)
-                            : (sipServer != null ? sipServer.getUdpPort() : 5060);
+                    int serverPort;
+                    if (sipServer != null && sipServer.getTransportRegistry() != null) {
+                        serverPort = sipServer.getTransportRegistry().resolveServerPort(request, sipServer.getConfiguration());
+                    } else {
+                        serverPort = (request.getTransport() == SipTransport.TCP)
+                                ? (sipServer != null ? sipServer.getTcpPort() : 5060)
+                                : (sipServer != null ? sipServer.getUdpPort() : 5060);
+                    }
 
                     SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
-                    String contactUri = "<sip:annc@" + advertisedIp + ":" + serverPort
-                            + (request.getTransport() == SipTransport.TCP ? ";transport=tcp" : "") + ">";
+                    String contactUri;
+                    if (sipServer != null && sipServer.getTransportRegistry() != null) {
+                        contactUri = sipServer.getTransportRegistry().formatContactUri(request, advertisedIp, serverPort);
+                        contactUri = contactUri.replace("<sip:", "<sip:annc@");
+                    } else {
+                        contactUri = "<sip:annc@" + advertisedIp + ":" + serverPort
+                                + (request.getTransport() == SipTransport.TCP ? ";transport=tcp" : "") + ">";
+                    }
                     ok.getHeaders().setContact(contactUri);
-                    session.setAttribute("originalOk", ok);
+                    if (session != null) {
+                        session.setAttribute("originalOk", ok);
+                    }
 
                     return Mono.just(ok);
                 })
@@ -193,7 +209,7 @@ public class AnnouncementController {
                       SipSession session) {
         LOG.info("Received ACK for annc Call-ID: {}, starting RTP playback.", callId);
         if (session != null) {
-            session.setState(SipSession.State.CONFIRMED);
+            session.handleAck(request, null);
         }
 
         Optional<RtpMediaSession> mediaSessionOpt = rtpMediaManager.findSession(callId);
@@ -257,6 +273,9 @@ public class AnnouncementController {
                                    @SipCallId String callId,
                                    SipSession session) {
         LOG.info("Received BYE for Call-ID: {}, stopping playback and terminating session.", callId);
+        if (session != null) {
+            session.handleBye(request);
+        }
         cleanupCall(callId, session);
         return Mono.just(SipResponse.ok(request));
     }
@@ -269,6 +288,9 @@ public class AnnouncementController {
                          @SipCallId String callId,
                          SipSession session) {
         LOG.info("Received CANCEL for Call-ID: {}, cancelling playback.", callId);
+        if (session != null) {
+            session.handleCancel(request);
+        }
         cleanupCall(callId, session);
     }
 
@@ -299,7 +321,7 @@ public class AnnouncementController {
         if (player != null) {
             player.stop();
         }
-        if (session != null) {
+        if (session != null && !session.isTerminated()) {
             session.setState(SipSession.State.TERMINATED);
         }
         rtpMediaManager.terminateSession(callId);
@@ -340,8 +362,13 @@ public class AnnouncementController {
             bye.getHeaders().setContentLength(0);
 
             String host = resolveAdvertisedIp();
-            int port = (originalInvite.getTransport() == SipTransport.TCP) ? sipServer.getTcpPort() : sipServer.getUdpPort();
-            String proto = (originalInvite.getTransport() == SipTransport.TCP) ? "TCP" : "UDP";
+            int port;
+            if (sipServer.getTransportRegistry() != null) {
+                port = sipServer.getTransportRegistry().resolveServerPort(originalInvite, sipServer.getConfiguration());
+            } else {
+                port = (originalInvite.getTransport() == SipTransport.TCP) ? sipServer.getTcpPort() : sipServer.getUdpPort();
+            }
+            String proto = originalInvite.getTransport() != null ? originalInvite.getTransport().name() : "UDP";
             String branch = "z9hG4bK-bye-" + UUID.randomUUID().toString().substring(0, 8);
             bye.getHeaders().set(SipHeaders.VIA, "SIP/2.0/" + proto + " " + host + ":" + port + ";branch=" + branch + ";rport");
 
