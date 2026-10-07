@@ -250,4 +250,27 @@ public class AnnouncementSecurityAndNetworkingTest {
         assertNotNull(retryResp);
         assertEquals(200, retryResp.getStatusCode(), "After call cleanup, new call within limit must succeed");
     }
+
+    @Test
+    void testTlsContactUriIncludesAnnouncementUser() {
+        SipRequest tlsInvite = SipRequest.builder(SipMethod.INVITE, "sips:annc@127.0.0.1;play=builtin:tone:440,100")
+                .from("<sips:alice@example.com>;tag=tls1")
+                .to("<sips:annc@example.com>")
+                .callId("call-tls-annc-" + UUID.randomUUID())
+                .build();
+        tlsInvite.setTransport(SipTransport.TLS);
+        tlsInvite.setRemoteAddress(new InetSocketAddress("127.0.0.1", 54321));
+
+        net.pilgrim.sip.session.SipSession session = new net.pilgrim.sip.session.SipSession(tlsInvite.getCallId());
+        SipResponse resp = controller.onAnnouncementInvite(tlsInvite, tlsInvite.getCallId(), null, session).block(Duration.ofSeconds(2));
+
+        assertNotNull(resp);
+        assertEquals(200, resp.getStatusCode());
+        String contact = resp.getHeaders().getContact();
+        assertNotNull(contact);
+        assertTrue(contact.startsWith("<sips:annc@"), "TLS Contact URI must include required 'annc@' user, got: " + contact);
+        assertTrue(contact.contains("transport=tls"), "TLS Contact URI must include transport=tls, got: " + contact);
+
+        controller.onBye(new SipRequest(SipMethod.BYE, tlsInvite.getUri()), tlsInvite.getCallId(), session).block(Duration.ofSeconds(1));
+    }
 }

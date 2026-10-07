@@ -157,11 +157,13 @@ public class AnnouncementController {
                     SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
                     String contactUri;
                     if (sipServer != null && sipServer.getTransportRegistry() != null) {
-                        contactUri = sipServer.getTransportRegistry().formatContactUri(request, advertisedIp, serverPort);
-                        contactUri = contactUri.replace("<sip:", "<sip:annc@");
+                        contactUri = sipServer.getTransportRegistry().formatContactUri(request, advertisedIp, serverPort, "annc");
                     } else {
-                        contactUri = "<sip:annc@" + advertisedIp + ":" + serverPort
-                                + (request.getTransport() == SipTransport.TCP ? ";transport=tcp" : "") + ">";
+                        boolean isTls = request.getTransport() == SipTransport.TLS;
+                        String scheme = isTls ? "sips" : "sip";
+                        String transportParam = request.getTransport() != null && request.getTransport() != SipTransport.UDP
+                                ? ";transport=" + request.getTransport().name().toLowerCase() : "";
+                        contactUri = "<" + scheme + ":annc@" + advertisedIp + ":" + serverPort + transportParam + ">";
                     }
                     ok.getHeaders().setContact(contactUri);
                     if (session != null) {

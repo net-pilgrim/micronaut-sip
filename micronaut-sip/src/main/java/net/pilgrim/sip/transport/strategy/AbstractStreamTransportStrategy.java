@@ -158,17 +158,29 @@ public abstract class AbstractStreamTransportStrategy implements SipTransportStr
                 });
 
         ChannelFuture connectFuture = bootstrap.connect(destination);
+        ChannelPromise writePromise = connectFuture.channel().newPromise();
         connectFuture.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 LOG.error("Failed opening outbound SIP {} connection to {}: {}",
                         getTransport(), destination, future.cause().getMessage(), future.cause());
+                writePromise.setFailure(future.cause());
                 return;
             }
             Channel channel = future.channel();
-            channel.writeAndFlush(message).addListener(writeFuture -> channel.close());
+            channel.writeAndFlush(message).addListener((ChannelFutureListener) writeFuture -> {
+                try {
+                    if (writeFuture.isSuccess()) {
+                        writePromise.setSuccess();
+                    } else {
+                        writePromise.setFailure(writeFuture.cause());
+                    }
+                } finally {
+                    channel.close();
+                }
+            });
         });
 
-        return connectFuture;
+        return writePromise;
     }
 
     protected void configureOutboundChannel(SocketChannel ch, InetSocketAddress destination) {
@@ -197,17 +209,29 @@ public abstract class AbstractStreamTransportStrategy implements SipTransportStr
                 });
 
         ChannelFuture connectFuture = bootstrap.connect(destination);
+        ChannelPromise writePromise = connectFuture.channel().newPromise();
         connectFuture.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 LOG.error("Failed opening client SIP {} connection to {}: {}",
                         getTransport(), destination, future.cause().getMessage(), future.cause());
+                writePromise.setFailure(future.cause());
                 return;
             }
             Channel channel = future.channel();
-            channel.writeAndFlush(message).addListener(writeFuture -> channel.close());
+            channel.writeAndFlush(message).addListener((ChannelFutureListener) writeFuture -> {
+                try {
+                    if (writeFuture.isSuccess()) {
+                        writePromise.setSuccess();
+                    } else {
+                        writePromise.setFailure(writeFuture.cause());
+                    }
+                } finally {
+                    channel.close();
+                }
+            });
         });
 
-        return connectFuture;
+        return writePromise;
     }
 
     protected void configureOutboundClientChannel(SocketChannel ch, ClientTransportContext context, InetSocketAddress destination) {

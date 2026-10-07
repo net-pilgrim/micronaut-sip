@@ -21,7 +21,7 @@ public class SdpOfferAnswerContext {
     }
 
     public String getOffer() {
-        return offer != null ? offer : localOffer;
+        return offer;
     }
 
     public void setOffer(String offer) {

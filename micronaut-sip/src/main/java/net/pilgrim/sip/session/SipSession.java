@@ -169,6 +169,15 @@ public class SipSession {
     public void setAttribute(String key, Object value) {
         if (value == null) {
             attributes.remove(key);
+            if ("rseq".equals(key)) {
+                reliableContext.setRSeq(null);
+            } else if ("cseqNumber".equals(key)) {
+                reliableContext.setCSeqNumber(null);
+            } else if ("cseqMethod".equals(key)) {
+                reliableContext.setCSeqMethod(null);
+            } else if ("prackSink".equals(key)) {
+                reliableContext.setPrackSink(null);
+            }
             return;
         }
         attributes.put(key, value);
@@ -182,10 +191,19 @@ public class SipSession {
         } else if ("awaitingAckSdpAnswer".equals(key) && Boolean.TRUE.equals(value)) {
             offerAnswerContext.setState(SdpOfferAnswerState.AWAITING_ACK_ANSWER);
         } else if ("rseq".equals(key) && value instanceof Long r) {
-            reliableContext.initiate(r, 1L, "INVITE", (reactor.core.publisher.Sinks.One<Void>) attributes.get("prackSink"));
+            reliableContext.setRSeq(r);
+            if (reliableContext.getState() == net.pilgrim.sip.session.state.ReliableProvisionalState.NONE) {
+                reliableContext.setState(net.pilgrim.sip.session.state.ReliableProvisionalState.AWAITING_PRACK);
+            }
+        } else if ("cseqNumber".equals(key) && value instanceof Long cseq) {
+            reliableContext.setCSeqNumber(cseq);
+        } else if ("cseqMethod".equals(key) && value instanceof String method) {
+            reliableContext.setCSeqMethod(method);
         } else if ("prackSink".equals(key) && value instanceof reactor.core.publisher.Sinks.One sink) {
-            Long r = reliableContext.getRSeq() != null ? reliableContext.getRSeq() : (Long) attributes.get("rseq");
-            reliableContext.initiate(r != null ? r : 1L, 1L, "INVITE", (reactor.core.publisher.Sinks.One<Void>) sink);
+            reliableContext.setPrackSink((reactor.core.publisher.Sinks.One<Void>) sink);
+            if (reliableContext.getState() == net.pilgrim.sip.session.state.ReliableProvisionalState.NONE) {
+                reliableContext.setState(net.pilgrim.sip.session.state.ReliableProvisionalState.AWAITING_PRACK);
+            }
         }
     }
 
@@ -197,11 +215,20 @@ public class SipSession {
         } else if ("sdpAnswer".equals(key)) {
             String answer = offerAnswerContext.getAnswer();
             if (answer != null) return (T) answer;
+        } else if ("localSdpOffer".equals(key)) {
+            String localOffer = offerAnswerContext.getLocalOffer();
+            if (localOffer != null) return (T) localOffer;
         } else if ("awaitingAckSdpAnswer".equals(key)) {
             return (T) Boolean.valueOf(offerAnswerContext.isAwaitingAckAnswer());
         } else if ("rseq".equals(key)) {
             Long rseq = reliableContext.getRSeq();
             if (rseq != null) return (T) rseq;
+        } else if ("cseqNumber".equals(key)) {
+            Long cseq = reliableContext.getCSeqNumber();
+            if (cseq != null) return (T) cseq;
+        } else if ("cseqMethod".equals(key)) {
+            String method = reliableContext.getCSeqMethod();
+            if (method != null) return (T) method;
         } else if ("prackSink".equals(key)) {
             Object sink = reliableContext.getPrackSink();
             if (sink != null) return (T) sink;

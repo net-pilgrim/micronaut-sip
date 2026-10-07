@@ -87,6 +87,7 @@ public class VxmlParser {
                 case "var" -> items.add(parseVar(el));
                 case "block" -> items.add(parseBlock(el));
                 case "field" -> items.add(parseField(el));
+                case "record" -> items.add(parseRecord(el));
             }
         }
 
@@ -154,6 +155,39 @@ public class VxmlParser {
         }
 
         return new VxmlField(name, cond, expr, type, slot, prompts, grammars, choices, filled, noInput, noMatch);
+    }
+
+    private VxmlRecord parseRecord(Element recordEl) {
+        String name = getAttribute(recordEl, "name", "recording");
+        String cond = getAttribute(recordEl, "cond", null);
+        String expr = getAttribute(recordEl, "expr", null);
+        boolean beep = "true".equalsIgnoreCase(getAttribute(recordEl, "beep", "false"));
+        long maxtimeMs = VxmlRecord.parseDuration(getAttribute(recordEl, "maxtime", "30s"), 30_000L);
+        long finalsilenceMs = VxmlRecord.parseDuration(getAttribute(recordEl, "finalsilence", "3s"), 3_000L);
+        boolean dtmfterm = !"false".equalsIgnoreCase(getAttribute(recordEl, "dtmfterm", "true"));
+        String type = getAttribute(recordEl, "type", "audio/x-wav");
+
+        List<VxmlPrompt> prompts = new ArrayList<>();
+        VxmlFilled filled = null;
+        VxmlNoInput noInput = null;
+
+        NodeList children = recordEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node node = children.item(i);
+            if (node.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element el = (Element) node;
+            String tagName = getLocalTagName(el);
+
+            if ("prompt".equalsIgnoreCase(tagName)) {
+                prompts.add(parsePrompt(el));
+            } else if ("filled".equalsIgnoreCase(tagName)) {
+                filled = parseFilled(el);
+            } else if ("noinput".equalsIgnoreCase(tagName)) {
+                noInput = parseNoInput(el);
+            }
+        }
+
+        return new VxmlRecord(name, cond, expr, beep, maxtimeMs, finalsilenceMs, dtmfterm, type, prompts, filled, noInput);
     }
 
     private List<VxmlExecutable> parseExecutables(Element containerEl) {

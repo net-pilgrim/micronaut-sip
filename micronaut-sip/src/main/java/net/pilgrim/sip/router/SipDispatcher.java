@@ -957,6 +957,7 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
 
     private void handleDispatchError(Throwable error, SipRequest request, Consumer<SipResponse> responseSender) {
         if (request.getMethod() == SipMethod.ACK) {
+            LOG.warn("Error processing ACK for Call-ID: {}", request.getCallId(), error);
             return;
         }
 

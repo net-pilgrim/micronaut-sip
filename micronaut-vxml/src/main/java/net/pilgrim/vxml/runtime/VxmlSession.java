@@ -7,6 +7,7 @@ import net.pilgrim.vxml.grammar.VxmlGrammarMatcher;
 import net.pilgrim.vxml.loader.DefaultVxmlAudioLoader;
 import net.pilgrim.vxml.loader.VxmlAudioLoader;
 import net.pilgrim.vxml.loader.VxmlDocumentLoader;
+import net.pilgrim.vxml.speech.ToneGenerator;
 import net.pilgrim.vxml.speech.TtsClient;
 import net.pilgrim.vxml.media.VxmlMedia;
 import org.slf4j.Logger;
@@ -37,6 +38,7 @@ public class VxmlSession implements VxmlInterpreter {
         READY,
         RUNNING,
         WAITING_FOR_INPUT,
+        RECORDING,
         TERMINATED
     }
 
@@ -48,6 +50,7 @@ public class VxmlSession implements VxmlInterpreter {
     private volatile VxmlMedia media;
     private final Runnable onDialogComplete;
 
+    private final Map<String, Object> sessionScope = new ConcurrentHashMap<>();
     private final Map<String, Object> documentScope = new ConcurrentHashMap<>();
     private final Map<String, Object> dialogScope = new ConcurrentHashMap<>();
     private final Set<String> executedBlocks = ConcurrentHashMap.newKeySet();
@@ -56,11 +59,14 @@ public class VxmlSession implements VxmlInterpreter {
     private String currentDocUri;
     private VxmlForm currentForm;
     private VxmlField activeField;
+    private VxmlRecord activeRecord;
     private final StringBuilder dtmfBuffer = new StringBuilder();
 
     private volatile State state = State.READY;
     private final AtomicBoolean terminated = new AtomicBoolean(false);
     private ScheduledFuture<?> noInputTimer;
+    private ScheduledFuture<?> recordingTimer;
+    private long recordingStartTime;
 
     public VxmlSession(String callId,
                        VxmlDocument initialDoc,
@@ -147,9 +153,11 @@ public class VxmlSession implements VxmlInterpreter {
         // Initialize form-level variables
         for (VxmlFormItem item : form.getItems()) {
             if (item instanceof VxmlVar var) {
-                Object val = eval(var.getExpr());
-                if (val != null) {
-                    dialogScope.put(var.getName(), val);
+                if (!dialogScope.containsKey(var.getName()) && !sessionScope.containsKey(var.getName())) {
+                    Object val = eval(var.getExpr());
+                    if (val != null) {
+                        dialogScope.put(var.getName(), val);
+                    }
                 }
             }
         }
@@ -206,8 +214,92 @@ public class VxmlSession implements VxmlInterpreter {
                     });
                 }
                 return;
+            } else if (nextItem instanceof VxmlRecord record) {
+                activeRecord = record;
+                activeField = null;
+
+                byte[] promptAudio = renderPrompts(record.getPrompts());
+                boolean bargeIn = isBargeInAllowed(record.getPrompts());
+
+                if (promptAudio.length > 0 && media != null) {
+                    state = State.RUNNING;
+                    media.playAudio(promptAudio, bargeIn, () -> startRecordPhase(record));
+                } else {
+                    startRecordPhase(record);
+                }
+                return;
             }
         }
+    }
+
+    private synchronized void startRecordPhase(VxmlRecord record) {
+        if (state == State.TERMINATED) {
+            return;
+        }
+        if (record.isBeep() && media != null) {
+            byte[] beep = ToneGenerator.generateTone(1000, 500);
+            media.playAudio(beep, false, () -> beginRecording(record));
+        } else {
+            beginRecording(record);
+        }
+    }
+
+    private synchronized void beginRecording(VxmlRecord record) {
+        if (state == State.TERMINATED) {
+            return;
+        }
+        state = State.RECORDING;
+        recordingStartTime = System.currentTimeMillis();
+        if (media != null) {
+            media.startRecording();
+        }
+
+        long maxtimeMs = record.getMaxtimeMs();
+        cancelRecordingTimer();
+        recordingTimer = TIMER_SCHEDULER.schedule(() -> onRecordFinished(null), maxtimeMs, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelRecordingTimer() {
+        if (recordingTimer != null) {
+            recordingTimer.cancel(false);
+            recordingTimer = null;
+        }
+    }
+
+    public synchronized void onRecordFinished(Character termChar) {
+        if (activeRecord == null || state != State.RECORDING) {
+            return;
+        }
+        cancelRecordingTimer();
+
+        VxmlRecord record = activeRecord;
+        activeRecord = null;
+
+        byte[] recordedBytes = (media != null) ? media.stopRecording() : new byte[0];
+        long durationMs = Math.max(0, System.currentTimeMillis() - recordingStartTime);
+
+        dialogScope.put(record.getName(), recordedBytes);
+        dialogScope.put(record.getName() + "$.termchar", termChar != null ? String.valueOf(termChar) : "");
+        dialogScope.put(record.getName() + "$.duration", durationMs);
+        dialogScope.put(record.getName() + "$.size", recordedBytes.length);
+
+        LOG.info("VoiceXML <record name='{}'> completed (bytes: {}, termchar: '{}') for Call-ID: {}",
+                record.getName(), recordedBytes.length, termChar != null ? termChar : "none", callId);
+
+        if (record.getFilled() != null) {
+            FlowControl fc = executeExecutables(record.getFilled().getExecutables());
+            if (fc.isExit()) {
+                terminate();
+                return;
+            }
+            if (fc.isGoto()) {
+                handleGoto(fc.getGotoTarget());
+                return;
+            }
+        }
+
+        state = State.RUNNING;
+        runFia();
     }
 
     private VxmlFormItem selectNextItem() {
@@ -221,14 +313,20 @@ public class VxmlSession implements VxmlInterpreter {
             if (item instanceof VxmlBlock block) {
                 String key = getItemKey(block);
                 if (!executedBlocks.contains(key)) {
-                    if (VxmlExpressionEvaluator.evaluateCondition(block.getCond(), dialogScope, documentScope)) {
+                    if (VxmlExpressionEvaluator.evaluateCondition(block.getCond(), dialogScope, documentScope, sessionScope)) {
                         return block;
                     }
                 }
             } else if (item instanceof VxmlField field) {
                 if (!dialogScope.containsKey(field.getName())) {
-                    if (VxmlExpressionEvaluator.evaluateCondition(field.getCond(), dialogScope, documentScope)) {
+                    if (VxmlExpressionEvaluator.evaluateCondition(field.getCond(), dialogScope, documentScope, sessionScope)) {
                         return field;
+                    }
+                }
+            } else if (item instanceof VxmlRecord record) {
+                if (!dialogScope.containsKey(record.getName())) {
+                    if (VxmlExpressionEvaluator.evaluateCondition(record.getCond(), dialogScope, documentScope, sessionScope)) {
+                        return record;
                     }
                 }
             }
@@ -255,6 +353,9 @@ public class VxmlSession implements VxmlInterpreter {
         if (media != null && media.isAudioPlaying()) {
             if (media.isBargeInAllowed()) {
                 media.stopAudio();
+                if (activeRecord != null && state != State.RECORDING) {
+                    beginRecording(activeRecord);
+                }
             } else {
                 return; // Barge-in not permitted, ignore
             }
@@ -262,6 +363,15 @@ public class VxmlSession implements VxmlInterpreter {
 
         cancelNoInputTimer();
         dtmfBuffer.append(digit);
+
+        // Check if recording is active and dtmfterm is enabled
+        if (state == State.RECORDING && activeRecord != null) {
+            if (activeRecord.isDtmfterm()) {
+                LOG.info("DTMF '{}' terminated recording for Call-ID: {}", digit, callId);
+                onRecordFinished(digit);
+                return;
+            }
+        }
 
         if (activeField == null) {
             return;
@@ -429,12 +539,12 @@ public class VxmlSession implements VxmlInterpreter {
     }
 
     private FlowControl executeIf(VxmlIf ifNode) {
-        if (VxmlExpressionEvaluator.evaluateCondition(ifNode.getCond(), dialogScope, documentScope)) {
+        if (VxmlExpressionEvaluator.evaluateCondition(ifNode.getCond(), dialogScope, documentScope, sessionScope)) {
             return executeExecutables(ifNode.getThenExecutables());
         }
 
         for (VxmlElseIf elseIf : ifNode.getElseIfs()) {
-            if (VxmlExpressionEvaluator.evaluateCondition(elseIf.getCond(), dialogScope, documentScope)) {
+            if (VxmlExpressionEvaluator.evaluateCondition(elseIf.getCond(), dialogScope, documentScope, sessionScope)) {
                 return executeExecutables(elseIf.getExecutables());
             }
         }
@@ -453,19 +563,27 @@ public class VxmlSession implements VxmlInterpreter {
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (VxmlPrompt prompt : prompts) {
-            if (!VxmlExpressionEvaluator.evaluateCondition(prompt.getCond(), dialogScope, documentScope)) {
+            if (!VxmlExpressionEvaluator.evaluateCondition(prompt.getCond(), dialogScope, documentScope, sessionScope)) {
                 continue;
             }
 
+            StringBuilder textBuffer = new StringBuilder();
             for (VxmlPromptContent content : prompt.getContents()) {
                 if (content instanceof VxmlTextContent text) {
-                    if (ttsClient != null) {
-                        byte[] pcm = ttsClient.synthesize(text.getText(), null, null).block();
+                    textBuffer.append(text.getText());
+                } else if (content instanceof VxmlValue value) {
+                    Object evaluated = eval(value.getExpr());
+                    if (evaluated != null) {
+                        textBuffer.append(evaluated);
+                    }
+                } else if (content instanceof VxmlAudio audio) {
+                    if (textBuffer.length() > 0 && ttsClient != null) {
+                        byte[] pcm = ttsClient.synthesize(textBuffer.toString(), null, null).block();
                         if (pcm != null && pcm.length > 0) {
                             out.writeBytes(pcm);
                         }
+                        textBuffer.setLength(0);
                     }
-                } else if (content instanceof VxmlAudio audio) {
                     String src = audio.getSrc();
                     if (src == null && audio.getExpr() != null) {
                         Object evaluated = eval(audio.getExpr());
@@ -481,14 +599,13 @@ public class VxmlSession implements VxmlInterpreter {
                             LOG.warn("Failed loading prompt audio '{}' for Call-ID: {}", src, callId);
                         }
                     }
-                } else if (content instanceof VxmlValue value) {
-                    Object evaluated = eval(value.getExpr());
-                    if (evaluated != null && ttsClient != null) {
-                        byte[] pcm = ttsClient.synthesize(evaluated.toString(), null, null).block();
-                        if (pcm != null && pcm.length > 0) {
-                            out.writeBytes(pcm);
-                        }
-                    }
+                }
+            }
+
+            if (textBuffer.length() > 0 && ttsClient != null) {
+                byte[] pcm = ttsClient.synthesize(textBuffer.toString(), null, null).block();
+                if (pcm != null && pcm.length > 0) {
+                    out.writeBytes(pcm);
                 }
             }
         }
@@ -521,7 +638,7 @@ public class VxmlSession implements VxmlInterpreter {
     }
 
     private Object eval(String expr) {
-        return VxmlExpressionEvaluator.evaluate(expr, dialogScope, documentScope);
+        return VxmlExpressionEvaluator.evaluate(expr, dialogScope, documentScope, sessionScope);
     }
 
     public synchronized void terminate() {
@@ -530,9 +647,13 @@ public class VxmlSession implements VxmlInterpreter {
         }
         state = State.TERMINATED;
         cancelNoInputTimer();
+        cancelRecordingTimer();
 
         if (media != null) {
             media.stopAudio();
+            if (media.isRecording()) {
+                media.stopRecording();
+            }
         }
         if (onDialogComplete != null) {
             try {
@@ -606,6 +727,20 @@ public class VxmlSession implements VxmlInterpreter {
     @Override
     public Map<String, Object> getDialogScope() {
         return Collections.unmodifiableMap(dialogScope);
+    }
+
+    @Override
+    public Map<String, Object> getSessionScope() {
+        return Collections.unmodifiableMap(sessionScope);
+    }
+
+    @Override
+    public void setSessionVariable(String name, Object value) {
+        if (value != null) {
+            sessionScope.put(name, value);
+        } else {
+            sessionScope.remove(name);
+        }
     }
 
     public static Builder builder() {

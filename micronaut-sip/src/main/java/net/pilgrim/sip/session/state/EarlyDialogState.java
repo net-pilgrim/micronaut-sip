@@ -51,7 +51,16 @@ public final class EarlyDialogState extends ActiveDialogState {
     @Override
     public DialogTransitionResult handlePrack(SipSession session, SipRequest request, String rack, String prackBody) {
         ReliableProvisionalContext relCtx = session.getReliableContext();
-        if (rack != null && !rack.isBlank() && !relCtx.validateRack(rack)) {
+        if (relCtx.getState() == ReliableProvisionalState.AWAITING_PRACK) {
+            if (rack == null || rack.isBlank()) {
+                LOG.warn("Missing required RAck header in PRACK for Call-ID: {}", session.getCallId());
+                return DialogTransitionResult.rejected(getId(), "Missing required RAck header");
+            }
+            if (!relCtx.validateRack(rack)) {
+                LOG.warn("PRACK RAck mismatch for Call-ID: {}: received '{}'", session.getCallId(), rack);
+                return DialogTransitionResult.rejected(getId(), "RAck header mismatch");
+            }
+        } else if (rack != null && !rack.isBlank() && !relCtx.validateRack(rack)) {
             LOG.warn("PRACK RAck mismatch for Call-ID: {}: received '{}'", session.getCallId(), rack);
             return DialogTransitionResult.rejected(getId(), "RAck header mismatch");
         }

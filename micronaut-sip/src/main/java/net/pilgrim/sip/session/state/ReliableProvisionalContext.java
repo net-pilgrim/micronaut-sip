@@ -25,16 +25,32 @@ public class ReliableProvisionalContext {
         return rseq;
     }
 
+    public void setRSeq(Long rseq) {
+        this.rseq = rseq;
+    }
+
     public Long getCSeqNumber() {
         return cseqNumber;
+    }
+
+    public void setCSeqNumber(Long cseqNumber) {
+        this.cseqNumber = cseqNumber;
     }
 
     public String getCSeqMethod() {
         return cseqMethod;
     }
 
+    public void setCSeqMethod(String cseqMethod) {
+        this.cseqMethod = cseqMethod;
+    }
+
     public Sinks.One<Void> getPrackSink() {
         return prackSink;
+    }
+
+    public void setPrackSink(Sinks.One<Void> prackSink) {
+        this.prackSink = prackSink;
     }
 
     public void initiate(long rseq, long cseqNumber, String cseqMethod, Sinks.One<Void> sink) {
@@ -54,7 +70,7 @@ public class ReliableProvisionalContext {
             return false;
         }
         String[] parts = rack.trim().split("\\s+");
-        if (parts.length < 2) {
+        if (parts.length != 3) {
             return false;
         }
         try {
@@ -62,15 +78,13 @@ public class ReliableProvisionalContext {
             if (rseq != null && rseq != reqRSeq) {
                 return false;
             }
-            if (parts.length >= 3 && cseqNumber != null) {
-                long reqCSeq = Long.parseLong(parts[1]);
-                if (cseqNumber != reqCSeq) {
-                    return false;
-                }
-                String reqMethod = parts[2];
-                if (cseqMethod != null && !cseqMethod.equalsIgnoreCase(reqMethod)) {
-                    return false;
-                }
+            long reqCSeq = Long.parseLong(parts[1]);
+            if (cseqNumber != null && cseqNumber != reqCSeq) {
+                return false;
+            }
+            String reqMethod = parts[2];
+            if (cseqMethod != null && !cseqMethod.equalsIgnoreCase(reqMethod)) {
+                return false;
             }
             return true;
         } catch (NumberFormatException e) {

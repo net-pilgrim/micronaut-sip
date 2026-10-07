@@ -150,6 +150,40 @@ public class VxmlParserTest {
     }
 
     @Test
+    void testParseRecordFormItem() throws Exception {
+        String xml = """
+                <vxml version="2.1">
+                  <form id="recordForm">
+                    <record name="voiceMsg" beep="true" maxtime="30s" finalsilence="3s" dtmfterm="true" type="audio/x-wav">
+                      <prompt bargein="true">Please record your message.</prompt>
+                      <filled>
+                        <assign name="saved" expr="'true'"/>
+                        <exit/>
+                      </filled>
+                    </record>
+                  </form>
+                </vxml>
+                """;
+
+        VxmlDocument doc = parser.parse(xml);
+        VxmlForm form = doc.getFirstForm().orElse(null);
+        assertNotNull(form);
+        assertEquals(1, form.getItems().size());
+        assertInstanceOf(VxmlRecord.class, form.getItems().get(0));
+
+        VxmlRecord record = (VxmlRecord) form.getItems().get(0);
+        assertEquals("voiceMsg", record.getName());
+        assertTrue(record.isBeep());
+        assertEquals(30000L, record.getMaxtimeMs());
+        assertEquals(3000L, record.getFinalsilenceMs());
+        assertTrue(record.isDtmfterm());
+        assertEquals("audio/x-wav", record.getType());
+        assertEquals(1, record.getPrompts().size());
+        assertNotNull(record.getFilled());
+        assertEquals(2, record.getFilled().getExecutables().size());
+    }
+
+    @Test
     void testInvalidRootThrowsException() {
         assertThrows(IllegalArgumentException.class, () -> parser.parse("<notvxml/>"));
         assertThrows(IllegalArgumentException.class, () -> parser.parse(""));

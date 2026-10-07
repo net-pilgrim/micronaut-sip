@@ -59,6 +59,15 @@ class SipTransportStrategyTest {
         assertEquals(SipTransport.UDP, SipTransport.fromVia("SIP/2.0/UDP"));
         assertEquals(SipTransport.TCP, SipTransport.fromVia("SIP/2.0/TCP"));
         assertEquals(SipTransport.TLS, SipTransport.fromVia("SIP/2.0/TLS"));
+        assertThrows(IllegalArgumentException.class, () -> SipTransport.fromVia("SIP/2.0/SCTP"));
+        assertThrows(IllegalArgumentException.class, () -> SipTransport.fromVia("SIP/2.0/UNKNOWN"));
+    }
+
+    @Test
+    @DisplayName("Registry throws IllegalArgumentException on unsupported transport")
+    void testUnsupportedTransportThrowsException() {
+        assertThrows(IllegalArgumentException.class, () -> registry.get(SipTransport.WS));
+        assertThrows(IllegalArgumentException.class, () -> registry.get(SipTransport.WSS));
     }
 
     @Test
@@ -91,5 +100,9 @@ class SipTransportStrategyTest {
         SipRequest tlsReq = new SipRequest(SipMethod.INVITE, SipUri.parse("sip:bob@example.com"));
         tlsReq.setTransport(SipTransport.TLS);
         assertEquals("<sips:192.168.1.50:5062;transport=tls>", registry.formatContactUri(tlsReq, "192.168.1.50", 5062));
+
+        // Contact URIs with specified user part (e.g. annc)
+        assertEquals("<sips:annc@192.168.1.50:5062;transport=tls>", registry.formatContactUri(tlsReq, "192.168.1.50", 5062, "annc"));
+        assertEquals("<sip:annc@192.168.1.50:5060>", registry.formatContactUri(udpReq, "192.168.1.50", 5060, "annc"));
     }
 }

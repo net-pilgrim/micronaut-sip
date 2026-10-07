@@ -869,8 +869,12 @@ public class ReactiveSipClient {
             if ("sips".equalsIgnoreCase(uri.getScheme())) {
                 return SipTransport.TLS;
             }
-            SipTransport fromUri = parseTransportToken(uri.getParameter("transport"));
-            if (fromUri != null) {
+            String transportParam = uri.getParameter("transport");
+            if (transportParam != null && !transportParam.isBlank()) {
+                SipTransport fromUri = parseTransportToken(transportParam);
+                if (fromUri == null) {
+                    throw new IllegalArgumentException("Unsupported SIP transport parameter in URI: " + transportParam);
+                }
                 return fromUri;
             }
         }

@@ -47,10 +47,11 @@ public enum SipTransport {
     public static SipTransport fromVia(String viaHeader) {
         if (viaHeader == null) return UDP;
         String upper = viaHeader.toUpperCase();
+        if (upper.startsWith("SIP/2.0/UDP")) return UDP;
         if (upper.startsWith("SIP/2.0/TLS")) return TLS;
         if (upper.startsWith("SIP/2.0/TCP")) return TCP;
         if (upper.startsWith("SIP/2.0/WSS")) return WSS;
         if (upper.startsWith("SIP/2.0/WS")) return WS;
-        return UDP;
+        throw new IllegalArgumentException("Unsupported SIP transport in Via header: " + viaHeader);
     }
 }

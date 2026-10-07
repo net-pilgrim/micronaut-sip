@@ -67,4 +67,22 @@ public interface VxmlInterpreter {
      * @return unmodifiable map of dialog-scoped variables
      */
     Map<String, Object> getDialogScope();
+
+    /**
+     * Returns the active session-scoped variables.
+     *
+     * @return unmodifiable map of session-scoped variables
+     */
+    default Map<String, Object> getSessionScope() {
+        return java.util.Map.of();
+    }
+
+    /**
+     * Sets a session-scoped variable.
+     *
+     * @param name  variable name
+     * @param value variable value
+     */
+    default void setSessionVariable(String name, Object value) {
+    }
 }

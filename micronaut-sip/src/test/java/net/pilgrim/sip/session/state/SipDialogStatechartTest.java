@@ -93,9 +93,41 @@ class SipDialogStatechartTest {
         session.getReliableContext().initiate(1L, 1L, "INVITE", prackSink);
         assertEquals(ReliableProvisionalState.AWAITING_PRACK, session.getReliableContext().getState());
 
+        SipRequest prackReq = new SipRequest(SipMethod.PRACK, SipUri.parse("sip:alice@example.com"));
+
+        // Missing RAck header when awaiting PRACK must be rejected
+        DialogTransitionResult nullRackRes = session.handlePrack(prackReq, null, null);
+        assertFalse(nullRackRes.successful());
+        assertTrue(nullRackRes.isRejected());
+        assertEquals("Missing required RAck header", nullRackRes.message());
+
+        DialogTransitionResult blankRackRes = session.handlePrack(prackReq, "   ", null);
+        assertFalse(blankRackRes.successful());
+        assertTrue(blankRackRes.isRejected());
+        assertEquals("Missing required RAck header", blankRackRes.message());
+
+        // Malformed two-field RAck header must be rejected
+        DialogTransitionResult twoFieldRes = session.handlePrack(prackReq, "1 1", null);
+        assertFalse(twoFieldRes.successful());
+        assertTrue(twoFieldRes.isRejected());
+
+        // Four-field RAck header must be rejected
+        DialogTransitionResult fourFieldRes = session.handlePrack(prackReq, "1 1 INVITE extra", null);
+        assertFalse(fourFieldRes.successful());
+        assertTrue(fourFieldRes.isRejected());
+
+        // Mismatched CSeq number must be rejected
+        DialogTransitionResult badCseqRes = session.handlePrack(prackReq, "1 2 INVITE", null);
+        assertFalse(badCseqRes.successful());
+        assertTrue(badCseqRes.isRejected());
+
+        // Mismatched method must be rejected
+        DialogTransitionResult badMethodRes = session.handlePrack(prackReq, "1 1 BYE", null);
+        assertFalse(badMethodRes.successful());
+        assertTrue(badMethodRes.isRejected());
+
         // Incorrect RAck sequence number
-        SipRequest badPrack = new SipRequest(SipMethod.PRACK, SipUri.parse("sip:alice@example.com"));
-        DialogTransitionResult badRes = session.handlePrack(badPrack, "2 1 INVITE", null);
+        DialogTransitionResult badRes = session.handlePrack(prackReq, "2 1 INVITE", null);
         assertFalse(badRes.successful());
         assertTrue(badRes.isRejected());
 
@@ -182,5 +214,27 @@ class SipDialogStatechartTest {
         session.setAttribute("rseq", 42L);
         assertEquals(42L, (Long) session.getAttribute("rseq"));
         assertEquals(42L, session.getReliableContext().getRSeq());
+
+        // Local offer must not be returned by getOffer() or getAttribute("sdpOffer")
+        SipSession localSession = new SipSession("local-call-id");
+        localSession.setAttribute("localSdpOffer", "local-sdp");
+        assertEquals("local-sdp", localSession.getAttribute("localSdpOffer"));
+        assertEquals("local-sdp", localSession.getOfferAnswerContext().getLocalOffer());
+        assertNull(localSession.getOfferAnswerContext().getOffer(), "getOffer must not return localOffer");
+        assertNull(localSession.getAttribute("sdpOffer"), "getAttribute(sdpOffer) must not return localOffer");
+
+        // Compatibility writes must preserve existing reliable provisional context
+        SipSession relSession = new SipSession("rel-call-id");
+        reactor.core.publisher.Sinks.One<Void> testSink = reactor.core.publisher.Sinks.one();
+        relSession.getReliableContext().initiate(1L, 105L, "UPDATE", testSink);
+        relSession.setAttribute("rseq", 2L);
+        assertEquals(2L, (Long) relSession.getAttribute("rseq"));
+        assertEquals(2L, relSession.getReliableContext().getRSeq());
+        assertEquals(105L, relSession.getReliableContext().getCSeqNumber());
+        assertEquals(105L, (Long) relSession.getAttribute("cseqNumber"));
+        assertEquals("UPDATE", relSession.getReliableContext().getCSeqMethod());
+        assertEquals("UPDATE", relSession.getAttribute("cseqMethod"));
+        assertSame(testSink, relSession.getReliableContext().getPrackSink());
+        assertSame(testSink, relSession.getAttribute("prackSink"));
     }
 }

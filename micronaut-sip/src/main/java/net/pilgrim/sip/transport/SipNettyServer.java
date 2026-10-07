@@ -103,16 +103,22 @@ public class SipNettyServer {
 
     @PreDestroy
     public synchronized void stop() {
-        if (!running) {
-            return;
-        }
-        LOG.info("Shutting down SIP Netty Server...");
+        boolean wasRunning = running;
         running = false;
+        if (wasRunning) {
+            LOG.info("Shutting down SIP Netty Server...");
+        }
         for (SipTransportStrategy strategy : transportRegistry.getAll()) {
-            strategy.stopServer();
+            try {
+                strategy.stopServer();
+            } catch (Exception e) {
+                LOG.warn("Error stopping strategy {}: {}", strategy.getTransport(), e.getMessage());
+            }
             metrics.setTransportActive(strategy.getTransport().name().toLowerCase(), false);
         }
-        LOG.info("SIP Netty Server stopped.");
+        if (wasRunning) {
+            LOG.info("SIP Netty Server stopped.");
+        }
     }
 
     public ChannelFuture send(SipMessage message, InetSocketAddress destination) {

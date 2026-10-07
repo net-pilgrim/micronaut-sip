@@ -43,14 +43,17 @@ public class SipTransportRegistry {
     }
 
     /**
-     * Resolves the strategy for a transport type, falling back to UDP if not found.
+     * Resolves the strategy for a transport type.
      */
     public SipTransportStrategy get(SipTransport transport) {
         if (transport == null) {
-            return strategies.get(SipTransport.UDP);
+            transport = SipTransport.UDP;
         }
         SipTransportStrategy strategy = strategies.get(transport);
-        return strategy != null ? strategy : strategies.get(SipTransport.UDP);
+        if (strategy == null) {
+            throw new IllegalArgumentException("Unsupported SIP transport: " + transport);
+        }
+        return strategy;
     }
 
     /**
