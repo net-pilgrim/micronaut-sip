@@ -249,8 +249,7 @@ public final class RtpMediaSession implements Closeable {
     public void close() {
         if (closed.compareAndSet(false, true)) {
             incomingSink.tryEmitComplete();
-            channel.close();
-            portManager.releasePort(localPort);
+            channel.close().addListener(f -> portManager.releasePort(localPort));
         }
     }
 }

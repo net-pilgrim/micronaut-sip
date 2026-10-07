@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vxml version="2.1" xmlns="http://www.w3.org/2001/vxml">
+  <var name="customerStatus" expr="'active'"/>
+
+  <menu id="mainMenu">
+    <prompt bargein="true" timeout="3000ms">
+      <audio src="tone:440,500"/>
+      Welcome to the automated menu. For sales press 1. For support press 2.
+    </prompt>
+    <choice dtmf="1" next="#salesForm">Sales</choice>
+    <choice dtmf="2" next="#supportForm">Support</choice>
+  </menu>
+
+  <form id="salesForm">
+    <block>
+      <prompt bargein="true">
+        <audio src="tone:520,300"/>
+        You selected sales.
+      </prompt>
+      <exit/>
+    </block>
+  </form>
+
+  <form id="supportForm">
+    <field name="pin" type="digits?length=4">
+      <prompt bargein="true">Please enter your 4 digit pin.</prompt>
+      <filled>
+        <if cond="pin == '1234'">
+          <prompt>Pin verified.</prompt>
+        <else/>
+          <prompt>Invalid pin.</prompt>
+        </if>
+        <exit/>
+      </filled>
+    </field>
+  </form>
+</vxml>

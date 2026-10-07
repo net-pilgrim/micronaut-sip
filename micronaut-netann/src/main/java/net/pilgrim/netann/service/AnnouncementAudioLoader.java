@@ -28,6 +28,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import net.pilgrim.vxml.loader.VxmlAudioLoader;
+
 /**
  * Loads and decodes announcement audio prompts from various URL schemes
  * (classpath:, file:, http:, https:, /provisioned/, or builtin tones)
@@ -35,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Includes security controls against SSRF, memory exhaustion, and path traversal.
  */
 @Singleton
-public class AnnouncementAudioLoader {
+public class AnnouncementAudioLoader implements VxmlAudioLoader {
 
     private static final Logger LOG = LoggerFactory.getLogger(AnnouncementAudioLoader.class);
 

@@ -17,6 +17,7 @@ dependencies {
     implementation(project(":micronaut-sdp"))
     implementation(project(":micronaut-rtp"))
     implementation(project(":micronaut-sip"))
+    implementation(project(":micronaut-vxml"))
     implementation("io.projectreactor:reactor-core")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.micronaut:micronaut-management")
@@ -26,6 +27,7 @@ dependencies {
     testImplementation(project(":micronaut-sdp"))
     testImplementation(project(":micronaut-rtp"))
     testImplementation(project(":micronaut-sip"))
+    testImplementation(project(":micronaut-vxml"))
     testImplementation("io.projectreactor:reactor-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

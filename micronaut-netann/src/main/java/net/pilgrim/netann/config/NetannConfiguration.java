@@ -27,6 +27,50 @@ public class NetannConfiguration {
     private int maxAnnouncementsPerIp = 20;
     private int maxRepeatCount = 100;
 
+    // VoiceXML 2.1 Configuration
+    private boolean vxmlEnabled = true;
+    private String vxmlDirectory = "/var/netann/vxml";
+    private long vxmlDefaultTimeoutMs = 5000L;
+
+    public boolean isVxmlEnabled() {
+        return vxmlEnabled;
+    }
+
+    public void setVxmlEnabled(boolean vxmlEnabled) {
+        this.vxmlEnabled = vxmlEnabled;
+    }
+
+    @Property(name = "netann.vxml.enabled")
+    public void setNestedVxmlEnabled(boolean vxmlEnabled) {
+        this.vxmlEnabled = vxmlEnabled;
+    }
+
+    public String getVxmlDirectory() {
+        return vxmlDirectory;
+    }
+
+    public void setVxmlDirectory(String vxmlDirectory) {
+        this.vxmlDirectory = vxmlDirectory;
+    }
+
+    @Property(name = "netann.vxml.directory")
+    public void setNestedVxmlDirectory(String vxmlDirectory) {
+        this.vxmlDirectory = vxmlDirectory;
+    }
+
+    public long getVxmlDefaultTimeoutMs() {
+        return vxmlDefaultTimeoutMs;
+    }
+
+    public void setVxmlDefaultTimeoutMs(long vxmlDefaultTimeoutMs) {
+        this.vxmlDefaultTimeoutMs = vxmlDefaultTimeoutMs;
+    }
+
+    @Property(name = "netann.vxml.default-timeout-ms")
+    public void setNestedVxmlDefaultTimeoutMs(long vxmlDefaultTimeoutMs) {
+        this.vxmlDefaultTimeoutMs = vxmlDefaultTimeoutMs;
+    }
+
     public boolean isHttpEnabled() {
         return httpEnabled;
     }

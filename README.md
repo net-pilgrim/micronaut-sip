@@ -150,6 +150,15 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Resolves audio content from `classpath:`, `file:`, `/provisioned/`, `http(s):`, and synthetic frequencies (`tone:<freq>`), streaming 20ms G.711 PCMU/PCMA frames over RTP.
     - Strict RFC 4240 error handling: `400 Bad Request` on missing `play=`, `404 Not Found` on non-existent audio, and `488 Not Acceptable Here` on unhandled service indicators.
     - Automatic dialog completion: emits in-dialog `BYE` upon playback completion, or cleanly tears down background streaming upon caller `BYE`/`CANCEL`.
+    - Dialog Service endpoints (`sip:dialog@...` and `sip:vxml@...`) gated behind `netann.vxml.enabled`, powered by `:micronaut-vxml`.
+
+17. **VoiceXML 2.1 Dialog Engine Module (`micronaut-vxml`)**:
+    - Standalone, protocol-neutral library module implementing the W3C VoiceXML 2.1 Form Interpretation Algorithm (FIA) runtime engine.
+    - XXE-hardened XML parser and strongly-typed AST covering `<vxml>`, `<form>`, `<menu>`, `<field>`, `<block>`, `<prompt>`, `<choice>`, `<goto>`, `<if>`, `<elseif>`, `<assign>`, `<var>`, `<filled>`, `<noinput>`, `<nomatch>`, `<exit>`, `<disconnect>`, `<clear>`, and `<reprompt>`.
+    - ECMAScript loose expression evaluator with operator coercion and scoping (dialog scope, document scope).
+    - DTMF and speech grammar matcher supporting exact digits, wildcard matching, and choice shortcuts.
+    - Abstract speech integration layer (`TtsClient`, `AsrClient`) with fallback synthetic tone generation (`ToneGenerator`).
+    - Pluggable audio loader interface (`VxmlAudioLoader`) and output sink interface (`VxmlOutputSink`) enabling seamless integration with RTP media pipelines.
 
 ---
 

@@ -115,61 +115,81 @@ public class RtpMediaManager implements Closeable {
             return existing;
         }
 
-        int localPort = portManager.allocatePort();
-        Sinks.Many<RtpInboundPacket> incomingSink = Sinks.many().multicast().onBackpressureBuffer(2048, false);
+        int maxAttempts = 10;
+        int attempts = 0;
+        java.util.List<Integer> failedPorts = new java.util.ArrayList<>();
 
-        Bootstrap bootstrap = new Bootstrap();
-        bootstrap.group(workerGroup)
-                .channel(NioDatagramChannel.class)
-                .option(ChannelOption.SO_RCVBUF, 1024 * 1024)
-                .option(ChannelOption.SO_SNDBUF, 1024 * 1024)
-                .handler(new io.netty.channel.ChannelInitializer<NioDatagramChannel>() {
-                    @Override
-                    protected void initChannel(NioDatagramChannel ch) {
-                        ch.pipeline().addLast("codec", new RtpDatagramCodec(remoteAddress));
-                        ch.pipeline().addLast("handler", new SimpleChannelInboundHandler<RtpInboundPacket>() {
-                            @Override
-                            protected void channelRead0(ChannelHandlerContext ctx, RtpInboundPacket msg) {
-                                RtpMediaSession session = sessions.get(callId);
-                                if (session != null) {
-                                    session.onInboundPacket(msg);
+        while (attempts < maxAttempts) {
+            int localPort = portManager.allocatePort();
+            Sinks.Many<RtpInboundPacket> incomingSink = Sinks.many().multicast().onBackpressureBuffer(2048, false);
+
+            Bootstrap bootstrap = new Bootstrap();
+            bootstrap.group(workerGroup)
+                    .channel(NioDatagramChannel.class)
+                    .option(ChannelOption.SO_REUSEADDR, true)
+                    .option(ChannelOption.SO_RCVBUF, 1024 * 1024)
+                    .option(ChannelOption.SO_SNDBUF, 1024 * 1024)
+                    .handler(new io.netty.channel.ChannelInitializer<NioDatagramChannel>() {
+                        @Override
+                        protected void initChannel(NioDatagramChannel ch) {
+                            ch.pipeline().addLast("codec", new RtpDatagramCodec(remoteAddress));
+                            ch.pipeline().addLast("handler", new SimpleChannelInboundHandler<RtpInboundPacket>() {
+                                @Override
+                                protected void channelRead0(ChannelHandlerContext ctx, RtpInboundPacket msg) {
+                                    RtpMediaSession session = sessions.get(callId);
+                                    if (session != null) {
+                                        session.onInboundPacket(msg);
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
+                    });
+
+            try {
+                InetAddress bindAddr = InetAddress.getByName(configuration.getBindAddress());
+                ChannelFuture future = bootstrap.bind(new InetSocketAddress(bindAddr, localPort)).sync();
+                Channel channel = future.channel();
+
+                RtpMediaSession session = new RtpMediaSession(
+                        callId,
+                        localPort,
+                        channel,
+                        portManager,
+                        incomingSink,
+                        codec,
+                        remoteAddress
+                );
+                for (Consumer<RtpMediaSession> initializer : sessionInitializers) {
+                    try {
+                        initializer.accept(session);
+                    } catch (Throwable t) {
+                        LOG.warn("Session initializer failed for Call-ID: {}", callId, t);
                     }
-                });
-
-        try {
-            InetAddress bindAddr = InetAddress.getByName(configuration.getBindAddress());
-            ChannelFuture future = bootstrap.bind(new InetSocketAddress(bindAddr, localPort)).sync();
-            Channel channel = future.channel();
-
-            RtpMediaSession session = new RtpMediaSession(
-                    callId,
-                    localPort,
-                    channel,
-                    portManager,
-                    incomingSink,
-                    codec,
-                    remoteAddress
-            );
-            for (Consumer<RtpMediaSession> initializer : sessionInitializers) {
-                try {
-                    initializer.accept(session);
-                } catch (Throwable t) {
-                    LOG.warn("Session initializer failed for Call-ID: {}", callId, t);
+                }
+                for (int p : failedPorts) {
+                    portManager.releasePort(p);
+                }
+                sessions.put(callId, session);
+                return session;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                portManager.releasePort(localPort);
+                for (int p : failedPorts) {
+                    portManager.releasePort(p);
+                }
+                throw new IOException("Interrupted while binding RTP port " + localPort + " for Call-ID: " + callId, e);
+            } catch (Exception e) {
+                failedPorts.add(localPort);
+                attempts++;
+                if (attempts >= maxAttempts) {
+                    for (int p : failedPorts) {
+                        portManager.releasePort(p);
+                    }
+                    throw new IOException("Failed to bind RTP port after " + maxAttempts + " attempts for Call-ID: " + callId + ": " + e.getMessage(), e);
                 }
             }
-            sessions.put(callId, session);
-            return session;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            portManager.releasePort(localPort);
-            throw new IOException("Interrupted while binding RTP port " + localPort + " for Call-ID: " + callId, e);
-        } catch (Exception e) {
-            portManager.releasePort(localPort);
-            throw new IOException("Failed to bind RTP port " + localPort + " for Call-ID: " + callId + ": " + e.getMessage(), e);
         }
+        throw new IOException("Failed to allocate RTP port for Call-ID: " + callId);
     }
 
     public Optional<RtpMediaSession> findSession(String callId) {

@@ -555,3 +555,66 @@ A comprehensive 1-hour sustained performance and concurrency benchmark was execu
 - **Resource Stability**: **Zero memory leaks** (+5.27 MB delta over final 50 mins across 150,000 calls), **zero socket/FD leaks** (returned to baseline 119 FDs).
 
 See [Performance & Benchmarking (`PERFORMANCE.md`)](PERFORMANCE.md#1-hour-sustained-load--concurrency-benchmark-micronaut-netann) for full telemetry graphs, repartition tables, and test automation scripts.
+
+---
+
+## 8. VoiceXML 2.1 Dialog Service (`dialog` / `vxml`) & Runtime Architecture
+
+In addition to RFC 4240 announcement streaming, `micronaut-netann` implements the **Dialog Service** per [RFC 4240 §4](https://datatracker.ietf.org/doc/html/rfc4240#section-4), [RFC 5552](https://datatracker.ietf.org/doc/html/rfc5552), and the [W3C VoiceXML 2.1 Specification](https://www.w3.org/TR/voicexml21/).
+
+### Architecture & Gating
+
+- **Modular Design**: The VoiceXML 2.1 parser, AST, Form Interpretation Algorithm (FIA) runtime, expression evaluator, grammar matcher, audio loader, and speech contracts are extracted into the standalone library module [`:micronaut-vxml`](../micronaut-vxml).
+- **Isolated Controller**: [`VxmlController`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/VxmlController.java) in `:micronaut-netann` handles all VoiceXML dialog traffic (`sip:dialog@...` and `sip:vxml@...`) and bridges media over RTP via [`VxmlAudioPlayer`](../micronaut-netann/src/main/java/net/pilgrim/netann/vxml/runtime/VxmlAudioPlayer.java).
+- **Feature Gating**: Controlled by configuration property `netann.vxml.enabled` (default `true`). When set to `false`, the controller bean is not registered and incoming `sip:dialog@...` requests cleanly fall through to `488 Not Acceptable Here` per RFC 4240 §2.
+- **RFC 4240 Stability**: Announcement behavior (`sip:annc@...`) in [`AnnouncementController`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java) remains completely untouched and isolated.
+- **Abstract Speech Layer**: Abstract [`TtsClient`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/speech/TtsClient.java) and [`AsrClient`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/speech/AsrClient.java) decouple the interpreter from specific speech backends, enabling MRCP / Whisper / external provider swaps.
+
+### Supported VoiceXML 2.1 Subset
+
+| Tag / Element | Attributes & Modifiers | Description |
+| :--- | :--- | :--- |
+| `<vxml>` | `version="2.1"` | Root document element; supports document-level `<var>` declarations. |
+| `<form>` | `id="..."` | Dialog container executed via the Form Interpretation Algorithm (FIA). |
+| `<menu>` | `id="..."` | Shorthand dialog desugared into a `<form>` containing choices and prompts. |
+| `<block>` | `name="..."`, `cond="..."` | Container for executable statements (`<prompt>`, `<assign>`, `<if>`, `<goto>`, `<exit>`). |
+| `<field>` | `name="..."`, `cond="..."`, `type="..."` | Interactive input collector supporting DTMF grammars, choices, `<filled>`, `<noinput>`, and `<nomatch>`. |
+| `<prompt>` | `bargein="true\|false"`, `timeout="..."`, `cond="..."` | Prompt queue; supports audio playback with instantaneous barge-in cutoff upon DTMF arrival. |
+| `<choice>` | `dtmf="..."`, `next="..."` | DTMF-triggered form/document transition. |
+| `<goto>` | `next="#form"`, `next="doc.vxml"`, `nextitem="..."` | Inter-form, intra-document, and external document transitions. |
+| `<if>` / `<elseif>` / `<else>` | `cond="..."` | Multi-branch conditional logic evaluated using ECMAScript loose equality. |
+| `<assign>` | `name="..."`, `expr="..."` | Updates variable values across dialog and document scopes. |
+| `<var>` | `name="..."`, `expr="..."` | Declares and initializes variables in dialog or document scopes. |
+| `<filled>` | `mode="all\|any"`, `namelist="..."` | Post-input action block executed when field grammars are matched. |
+| `<noinput>` | `count="..."` | Timeout handler executed when caller provides no input within the prompt deadline. |
+| `<nomatch>` | `count="..."` | Handler executed when caller DTMF input does not match active grammars. |
+| `<exit>` / `<disconnect>` | — | Terminates the dialog session and triggers an in-dialog `BYE` teardown. |
+| `<clear>` | `namelist="..."` | Clears field variables to allow re-prompting and re-entry. |
+| `<reprompt>` | — | Replays prompts for the currently active field. |
+
+### VoiceXML Dialog Call Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as SIP Caller / Gateway
+    participant Server as "NetAnn Server (VxmlController)"
+    participant Session as "VxmlSession (FIA Runtime)"
+    
+    Client->>Server: "INVITE sip:dialog@ms.example.net;voicexml=classpath:vxml/menu.vxml (with SDP Offer)"
+    Server->>Server: Parse & validate VoiceXML document, allocate RTP port
+    Server-->>Client: 200 OK (SDP Answer, Contact: <sip:dialog@...>)
+    Client->>Server: ACK sip:dialog@ms.example.net SIP/2.0
+    Server->>Session: start() -> initialize documentScope & dialogScope
+    Session->>Client: 20ms RTP Audio Stream (Menu prompt: "Press 1 for Sales...")
+    Note over Client,Server: Client presses '1' on keypad mid-prompt
+    Client->>Server: "INFO sip:dialog@... (application/dtmf-relay: Signal=1)"
+    Server-->>Client: 200 OK (X-Received-DTMF: 1)
+    Server->>Session: onDtmf('1') -> Barge-in cuts off RTP prompt immediately
+    Session->>Session: Match choice (dtmf="1" -> goto "#salesForm")
+    Session->>Client: 20ms RTP Audio Stream (Sales prompt: "Connecting to Sales...")
+    Session->>Session: Execute <exit/> tag; dialog complete
+    Server->>Client: "BYE sip:caller@... SIP/2.0"
+    Client-->>Server: 200 OK
+```
+

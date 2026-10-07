@@ -2,6 +2,7 @@ rootProject.name = "sip-parent"
 
 include("micronaut-sdp")
 include("micronaut-rtp")
+include("micronaut-vxml")
 include("micronaut-sip")
 include("sip-app")
 include("micronaut-netann")

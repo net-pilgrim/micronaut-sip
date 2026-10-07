@@ -60,17 +60,17 @@ This backlog is based on current implementation gaps visible in `micronaut-sip`,
 
 ## 4) NetAnn VXML-lite track (new)
 
-11. **Add a separate VXML controller behind a dedicated NetAnn profile/property**
+11. ~~**Add a separate VXML controller behind a dedicated NetAnn profile/property**~~ [DONE]
    - **Why:** Keep RFC 4240 announcement behavior stable while introducing VXML incrementally.
    - **Where:** new `micronaut-netann` controller (e.g. `VxmlController`) + `@Requires(env=...)` or `@Requires(property=...)` gating.
    - **Done when:** Existing `@OnInvite("annc")` flow is untouched and VXML traffic is isolated to the new controller.
 
-12. **Implement minimal VoiceXML 2.1 interpreter (DTMF-first) from grammar/schema subset**
-   - **Why:** Fastest path to practical IVR/dialog support without full external interpreter coupling.
-   - **Where:** new parser/runtime components in `micronaut-netann` (document loader, AST, interpreter session state bound to Call-ID).
-   - **Done when:** Supports core subset (`form/field/prompt/choice/goto/if`, basic grammars) and executes dialogs over current SIP/RTP stack.
+12. ~~**Implement minimal VoiceXML 2.1 interpreter (DTMF-first) from grammar/schema subset & extract as top library module**~~ [DONE]
+   - **Why:** Fastest path to practical IVR/dialog support without full external interpreter coupling; extracted into a standalone, protocol-neutral library module `:micronaut-vxml`.
+   - **Where:** new `:micronaut-vxml` library module (AST, XML parser, ECMAScript loose evaluator, grammar matcher, document loader, audio loader, FIA runtime session, abstract speech interfaces) consumed by `micronaut-netann` (`VxmlController` + `VxmlAudioPlayer`).
+   - **Done when:** Supports core subset (`form/field/prompt/choice/goto/if`, basic grammars), extracted as `:micronaut-vxml`, and executes dialogs over current SIP/RTP stack in `micronaut-netann`.
 
 13. **Add MRCP adapter layer for ASR/TTS backends (Whisper for ASR, separate TTS engine)**
    - **Why:** Preserve interpreter neutrality while enabling model/provider swaps.
-   - **Where:** `micronaut-netann` service interfaces (e.g. `AsrClient`, `TtsClient`) + MRCP implementation module.
+   - **Where:** `:micronaut-vxml` service interfaces (`AsrClient`, `TtsClient`) + new MRCP implementation module.
    - **Done when:** Interpreter calls abstract ASR/TTS services; MRCP implementation can target Whisper-compatible ASR and an explicit TTS backend.
