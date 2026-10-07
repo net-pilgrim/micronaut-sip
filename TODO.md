@@ -9,10 +9,10 @@ This backlog is based on current implementation gaps visible in `micronaut-sip`,
    - **Where:** `micronaut-sip/src/main/java/net/pilgrim/sip/model/SipMethod.java`, `.../annotation/On*.java`, `.../router/SipDispatcher.java`.
    - **Done when:** New `@OnPrack`, `@OnSubscribe`, `@OnNotify`, `@OnRefer`, `@OnUpdate` (and `@OnPublish`) annotations exist and routes auto-register cleanly without nested if-else ladders.
 
-2. **Improve transport behavior for `TLS/WS/WSS` in client/server**
-   - **Why:** Transport enum and parser recognize `TLS/WS/WSS`, but request sending only has explicit branches for UDP/TCP.
-   - **Where:** `.../model/SipTransport.java`, `.../client/ReactiveSipClient.java`, `.../transport/SipNettyServer.java`.
-   - **Done when:** Either (a) explicit “not supported yet” errors are returned for these transports, or (b) one of them is implemented end-to-end.
+2. ~~**Improve transport behavior for `TLS` in client/server and RFC 3263 DNS resolution**~~ [DONE]
+   - **Why:** Enables RFC 3261 SIPS, RFC 5630 TLS signaling on port 5061, and RFC 3263 server location (NAPTR -> SRV -> A/AAAA).
+   - **Where:** `.../model/SipTransport.java`, `.../client/ReactiveSipClient.java`, `.../transport/SipNettyServer.java`, `.../dns/DefaultSipDnsResolver.java`, `.../security/SipSslContextFactory.java`.
+   - **Done when:** Netty TLS pipeline, keystore/truststore configuration, self-signed dev fallback, `ReactiveSipClient` TLS send, and RFC 3263 DNS resolver are implemented and covered by unit and integration tests.
 
 3. **Add sample handlers + tests for one new method family (`SUBSCRIBE/NOTIFY`)**
    - **Why:** Integration tests currently assert `SUBSCRIBE` returns `405`; adding one real flow quickly demonstrates extensibility.
@@ -53,7 +53,7 @@ This backlog is based on current implementation gaps visible in `micronaut-sip`,
    - **Where:** `micronaut-sip` router/session modules + `sip-app` sample controller.
    - **Done when:** Event package registry, subscription state machine, and refresh/termination flows are test-covered.
 
-10. **Secure transports end-to-end (`SIPS` over TLS and optional WebSocket signaling)**
+10. ~~**Secure transports end-to-end (`SIPS` over TLS)**~~ [DONE] (WebSocket signaling `WS/WSS` remaining)
    - **Why:** Completes the transport model and enables modern deployment topologies.
    - **Where:** `micronaut-sip` transport layer + config + integration tests.
    - **Done when:** TLS listener/client are production-ready (cert config, handshake, integration tests), then WS/WSS if desired.

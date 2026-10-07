@@ -17,6 +17,18 @@ public class SipServerConfiguration {
     private boolean udpEnabled = true;
     private boolean tcpEnabled = true;
     private int tcpPort = 5060;
+    private boolean tlsEnabled = false;
+    private String tlsHost = "0.0.0.0";
+    private int tlsPort = 5061;
+    private int tlsWorkerThreads = 2;
+    private String keyStorePath;
+    private String keyStorePassword;
+    private String keyStoreType = "PKCS12";
+    private String trustStorePath;
+    private String trustStorePassword;
+    private String trustStoreType = "PKCS12";
+    private boolean clientAuth = false;
+    private boolean trustAll = false;
     private String serverName = "Micronaut-SIP/1.0";
     private long requestTimeoutMs = 5000;
     private long sessionTtlMs = 1800000; // 30 minutes default
@@ -103,6 +115,9 @@ public class SipServerConfiguration {
         if (tcpHost != null && !tcpHost.isBlank() && !"0.0.0.0".equals(tcpHost)) {
             return tcpHost.trim();
         }
+        if (tlsHost != null && !tlsHost.isBlank() && !"0.0.0.0".equals(tlsHost)) {
+            return tlsHost.trim();
+        }
         try {
             java.net.InetAddress localHost = java.net.InetAddress.getLocalHost();
             if (localHost != null && !localHost.isLoopbackAddress() && !localHost.isAnyLocalAddress()) {
@@ -182,6 +197,117 @@ public class SipServerConfiguration {
     @Property(name = "sip.server.tcp.port")
     public void setTcpNestedPort(int tcpPort) {
         this.tcpPort = tcpPort;
+    }
+
+    public boolean isTlsEnabled() {
+        return tlsEnabled;
+    }
+
+    public void setTlsEnabled(boolean tlsEnabled) {
+        this.tlsEnabled = tlsEnabled;
+    }
+
+    @Property(name = "sip.server.tls-enabled")
+    public void setTlsNestedEnabled(boolean tlsEnabled) {
+        this.tlsEnabled = tlsEnabled;
+    }
+
+    public String getTlsHost() {
+        return tlsHost;
+    }
+
+    public void setTlsHost(String tlsHost) {
+        this.tlsHost = tlsHost;
+    }
+
+    @Property(name = "sip.server.tls.host")
+    public void setTlsNestedHost(String tlsHost) {
+        this.tlsHost = tlsHost;
+    }
+
+    public int getTlsPort() {
+        return tlsPort;
+    }
+
+    public void setTlsPort(int tlsPort) {
+        this.tlsPort = tlsPort;
+    }
+
+    @Property(name = "sip.server.tls.port")
+    public void setTlsNestedPort(int tlsPort) {
+        this.tlsPort = tlsPort;
+    }
+
+    public int getTlsWorkerThreads() {
+        return tlsWorkerThreads;
+    }
+
+    public void setTlsWorkerThreads(int tlsWorkerThreads) {
+        this.tlsWorkerThreads = tlsWorkerThreads;
+    }
+
+    public String getKeyStorePath() {
+        return keyStorePath;
+    }
+
+    public void setKeyStorePath(String keyStorePath) {
+        this.keyStorePath = keyStorePath;
+    }
+
+    public String getKeyStorePassword() {
+        return keyStorePassword;
+    }
+
+    public void setKeyStorePassword(String keyStorePassword) {
+        this.keyStorePassword = keyStorePassword;
+    }
+
+    public String getKeyStoreType() {
+        return keyStoreType;
+    }
+
+    public void setKeyStoreType(String keyStoreType) {
+        this.keyStoreType = keyStoreType;
+    }
+
+    public String getTrustStorePath() {
+        return trustStorePath;
+    }
+
+    public void setTrustStorePath(String trustStorePath) {
+        this.trustStorePath = trustStorePath;
+    }
+
+    public String getTrustStorePassword() {
+        return trustStorePassword;
+    }
+
+    public void setTrustStorePassword(String trustStorePassword) {
+        this.trustStorePassword = trustStorePassword;
+    }
+
+    public String getTrustStoreType() {
+        return trustStoreType;
+    }
+
+    public void setTrustStoreType(String trustStoreType) {
+        this.trustStoreType = trustStoreType;
+    }
+
+    public boolean isClientAuth() {
+        return clientAuth;
+    }
+
+    public void setClientAuth(boolean clientAuth) {
+        this.clientAuth = clientAuth;
+    }
+
+    public boolean isTrustAll() {
+        return trustAll;
+    }
+
+    public void setTrustAll(boolean trustAll) {
+        this.trustAll = trustAll;
     }
 
     public String getServerName() {

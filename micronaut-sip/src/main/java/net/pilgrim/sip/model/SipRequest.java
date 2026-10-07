@@ -234,8 +234,19 @@ public class SipRequest extends SipMessage {
             return this;
         }
 
+        public Builder body(String body, String contentType) {
+            this.request.setBody(body);
+            this.request.headers.setContentType(contentType);
+            return this;
+        }
+
         public Builder body(byte[] body) {
             this.request.setBody(body);
+            return this;
+        }
+
+        public Builder transport(SipTransport transport) {
+            this.request.setTransport(transport);
             return this;
         }
 

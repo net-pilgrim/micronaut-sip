@@ -1,6 +1,6 @@
 # Micronaut Reactive SIP (RFC 3261) Multi-Module Project
 
-A reactive [Micronaut](https://micronaut.io) multi-module Gradle project communicating over the **Session Initiation Protocol (SIP)** (RFC 3261) supporting both **UDP** and **TCP** transports powered by **Netty** and **Project Reactor**.
+A reactive [Micronaut](https://micronaut.io) multi-module Gradle project communicating over the **Session Initiation Protocol (SIP)** (RFC 3261) supporting **UDP**, **TCP**, and **TLS** transports powered by **Netty** and **Project Reactor**.
 
 [![CI](https://github.com/net-pilgrim/micronaut-sip/actions/workflows/ci.yml/badge.svg)](https://github.com/net-pilgrim/micronaut-sip/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -29,6 +29,8 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
 1. **RFC 3261 Compliant Multi-Transport SIP Stack**:
    - Asynchronous UDP transport using Netty `NioDatagramChannel`.
    - Streaming TCP transport using Netty `NioServerSocketChannel` / `NioSocketChannel` with stream frame decoding (`Content-Length` boundary framing per RFC 3261 §18.1.1) and keep-alive ping support (RFC 5626).
+   - Secure TLS signaling (`SIP over TLS` / `SIPS` per RFC 3261 §19.1/§26 / RFC 5630) on port 5061 via Netty `SslHandler` supporting PKCS12/JKS keystores and mutual TLS client authentication (`clientAuth=REQUIRE`).
+   - RFC 3263 DNS Server Location resolving SIP URIs via NAPTR (`SIPS+D2T`, `SIP+D2T`, `SIP+D2U`) -> SRV (`_sips._tcp`, `_sip._tcp`, `_sip._udp`) -> A/AAAA records with priority and weight balancing.
    - High-throughput parser and encoder handling request lines, status lines, multi-value headers, line folding, compact header aliases (`v`, `f`, `t`, `i`, `m`, `c`, `l`), and body payloads (e.g. SDP).
    - Compliant response generation (RFC 3261 §8.2.6) with automatic propagation of `Via`, `From`, `To` (with tag generation), `Call-ID`, and `CSeq`.
    - Request validation enforcing RFC 3261 §8.1/§8.2: missing mandatory headers yield `400 Bad Request`, unsupported methods yield `405 Method Not Allowed` with dynamic `Allow` header, and unsupported `Require` extensions yield `420 Bad Extension` with `Unsupported` header.
@@ -73,13 +75,17 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
      - `void` for requests requiring no response (such as `ACK`).
 
 5. **Reactive SIP Client (`ReactiveSipClient`)**:
-   - **UDP & TCP Support**:
-     - `send(request, destination)`: final response (`Mono<SipResponse>`), with transport auto-resolved from SIP metadata (`Request-URI transport` / `Via` / request transport).
+   - **UDP, TCP & TLS Support (RFC 3261 / RFC 5630)**:
+     - `send(request, destination)`: final response (`Mono<SipResponse>`), with transport auto-resolved from SIP metadata (`Request-URI transport` / `sips:` scheme / `Via` / request transport).
      - `sendWithProvisional(request, destination)`: provisional + final responses (`Flux<SipResponse>`), with the same transport auto-resolution.
      - `send(request, destination, SipTransport)`: explicit override when transport must be forced.
-   - `sendAck(...)`: Sends an RFC 3261-compliant ACK over UDP or TCP, with optional SDP payload support for late-offer/answer call flows.
+   - **RFC 3263 DNS Location Overloads**:
+     - `send(request)`: resolves target host and transport automatically via NAPTR -> SRV -> A/AAAA lookups.
+     - `sendWithProvisional(request)`: reactive stream with DNS location resolution.
+   - `sendAck(...)`: Sends an RFC 3261-compliant ACK over UDP, TCP, or TLS (`sendAckTls`), with optional SDP payload support for late-offer/answer call flows.
    - `sendPrack(...)`: Sends an RFC 3262-compliant PRACK acknowledging reliable provisional responses.
-   - `sendBye(...)`: Terminates active calls over UDP or TCP.
+   - `sendBye(...)`: Terminates active calls over UDP, TCP, or TLS.
+   - `sendOneWay(...)`: Fires one-way SIP requests without waiting for response.
 
 6. **Dialog & Session Management (`SipSessionManager`)**:
    - Tracks call state transitions (`INITIAL` -> `EARLY` -> `CONFIRMED` -> `TERMINATED`).

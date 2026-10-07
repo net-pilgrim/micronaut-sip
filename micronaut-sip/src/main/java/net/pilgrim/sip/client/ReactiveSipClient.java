@@ -1,19 +1,27 @@
 package net.pilgrim.sip.client;
 
-import net.pilgrim.sip.config.SipServerConfiguration;
-import net.pilgrim.sip.dtmf.DtmfSignal;
-import net.pilgrim.sip.model.*;
-import net.pilgrim.sip.transport.SipNettyServer;
-import net.pilgrim.sip.transport.SipResponseRouter;
-import net.pilgrim.sip.transport.SipStreamFrameDecoder;
-import net.pilgrim.sip.transport.SipStreamEncoder;
+import io.micronaut.core.annotation.Nullable;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
 import jakarta.annotation.PreDestroy;
+import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
+import net.pilgrim.sip.config.SipServerConfiguration;
+import net.pilgrim.sip.dns.DefaultSipDnsResolver;
+import net.pilgrim.sip.dns.SipDnsResolver;
+import net.pilgrim.sip.dns.SipResolvedDestination;
+import net.pilgrim.sip.dtmf.DtmfSignal;
+import net.pilgrim.sip.model.*;
+import net.pilgrim.sip.security.SipSslContextFactory;
+import net.pilgrim.sip.transport.SipNettyServer;
+import net.pilgrim.sip.transport.SipResponseRouter;
+import net.pilgrim.sip.transport.SipStreamFrameDecoder;
+import net.pilgrim.sip.transport.SipStreamEncoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
@@ -21,8 +29,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import javax.net.ssl.SSLEngine;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -31,7 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * High-level reactive client for sending SIP requests over UDP or TCP.
+ * High-level reactive client for sending SIP requests over UDP, TCP, or TLS (RFC 3261 SIPS / RFC 3263 DNS).
  */
 @Singleton
 public class ReactiveSipClient {
@@ -41,15 +51,27 @@ public class ReactiveSipClient {
     private final SipNettyServer server;
     private final SipResponseRouter responseRouter;
     private final SipServerConfiguration configuration;
+    private final SipDnsResolver dnsResolver;
+    private final SslContext clientSslContext;
     private final AtomicLong cseqCounter = new AtomicLong(1);
     private final EventLoopGroup clientTcpGroup = new NioEventLoopGroup(2);
 
     public ReactiveSipClient(SipNettyServer server,
                              SipResponseRouter responseRouter,
                              SipServerConfiguration configuration) {
+        this(server, responseRouter, configuration, null);
+    }
+
+    @Inject
+    public ReactiveSipClient(SipNettyServer server,
+                             SipResponseRouter responseRouter,
+                             SipServerConfiguration configuration,
+                             @Nullable SipDnsResolver dnsResolver) {
         this.server = server;
         this.responseRouter = responseRouter;
         this.configuration = configuration;
+        this.dnsResolver = dnsResolver != null ? dnsResolver : new DefaultSipDnsResolver();
+        this.clientSslContext = SipSslContextFactory.createClientSslContext(configuration);
     }
 
     @PreDestroy
@@ -98,14 +120,57 @@ public class ReactiveSipClient {
         return sendWithProvisional(request, destination, autoPrepareHeaders, null);
     }
 
+    /**
+     * Sends a SIP request resolving destination and transport via RFC 3263 DNS (NAPTR -&gt; SRV -&gt; A/AAAA).
+     */
+    public Mono<SipResponse> send(SipRequest request) {
+        return send(request, true, null);
+    }
+
+    public Mono<SipResponse> send(SipRequest request, Duration timeout) {
+        return send(request, true, timeout);
+    }
+
+    public Mono<SipResponse> send(SipRequest request, boolean autoPrepareHeaders, Duration timeout) {
+        return sendWithProvisional(request, autoPrepareHeaders, timeout)
+                .filter(SipResponse::isFinal)
+                .next();
+    }
+
+    public Flux<SipResponse> sendWithProvisional(SipRequest request) {
+        return sendWithProvisional(request, true, null);
+    }
+
+    public Flux<SipResponse> sendWithProvisional(SipRequest request, Duration timeout) {
+        return sendWithProvisional(request, true, timeout);
+    }
+
+    public Flux<SipResponse> sendWithProvisional(SipRequest request, boolean autoPrepareHeaders, Duration timeout) {
+        Objects.requireNonNull(request, "request");
+        if (request.getUri() == null) {
+            return Flux.error(new IllegalArgumentException("Request URI must not be null for DNS resolution"));
+        }
+        return dnsResolver.resolvePrimary(request.getUri())
+                .flatMapMany(dest -> {
+                    if (request.getTransport() == null && request.getUri().getParameter("transport") == null) {
+                        request.setTransport(dest.transport());
+                    }
+                    return sendWithProvisional(request, dest.address(), autoPrepareHeaders, timeout);
+                });
+    }
+
     public Flux<SipResponse> sendWithProvisional(SipRequest request,
                                                  InetSocketAddress destination,
                                                  boolean autoPrepareHeaders,
                                                  Duration timeout) {
         SipTransport transport = resolveTransport(request);
-        return transport == SipTransport.TCP
-                ? sendTcpWithProvisionalInternal(request, destination, autoPrepareHeaders, timeout)
-                : sendUdpWithProvisionalInternal(request, destination, autoPrepareHeaders, timeout);
+        if (transport == SipTransport.TLS) {
+            return sendTlsWithProvisionalInternal(request, destination, autoPrepareHeaders, timeout);
+        } else if (transport == SipTransport.TCP) {
+            return sendTcpWithProvisionalInternal(request, destination, autoPrepareHeaders, timeout);
+        } else {
+            return sendUdpWithProvisionalInternal(request, destination, autoPrepareHeaders, timeout);
+        }
     }
 
     private Flux<SipResponse> sendUdpWithProvisionalInternal(SipRequest request,
@@ -405,6 +470,124 @@ public class ReactiveSipClient {
         });
     }
 
+    private Flux<SipResponse> sendTlsWithProvisionalInternal(SipRequest request,
+                                                              InetSocketAddress destination,
+                                                              boolean autoPrepareHeaders,
+                                                              Duration timeout) {
+        boolean isInvite = request.getMethod() == SipMethod.INVITE;
+        long initialTimeoutMs = (timeout != null)
+                ? timeout.toMillis()
+                : (isInvite ? configuration.getTimerBDelayMs() : configuration.getTimerFDelayMs());
+
+        return Flux.<SipResponse>create(sink -> {
+            try {
+                if (autoPrepareHeaders) {
+                    prepareHeaders(request, destination, SipTransport.TLS);
+                } else {
+                    request.setTransport(SipTransport.TLS);
+                    if (request.getHeaders().getVia() == null) {
+                        int localPort = server.getTlsPort();
+                        String branch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+                        request.getHeaders().addVia("SIP/2.0/TLS 127.0.0.1:" + localPort + ";branch=" + branch);
+                    }
+                }
+
+                AtomicBoolean finalResponseReceived = new AtomicBoolean(false);
+                AtomicBoolean ringTimeoutStarted = new AtomicBoolean(false);
+                AtomicReference<Disposable> timeoutTimer = new AtomicReference<>();
+                AtomicReference<Channel> channelRef = new AtomicReference<>();
+
+                Consumer<String> scheduleTimeout = (timerName) -> {
+                    long delayMs = "Ring timeout".equals(timerName)
+                            ? configuration.getRingTimeoutMs()
+                            : initialTimeoutMs;
+                    Disposable d = Mono.delay(Duration.ofMillis(delayMs), Schedulers.parallel())
+                            .subscribe(tick -> {
+                                if (!sink.isCancelled() && !finalResponseReceived.get()) {
+                                    Channel ch = channelRef.get();
+                                    if (ch != null && ch.isOpen()) ch.close();
+                                    sink.error(new TimeoutException(timerName + " expired after " + delayMs + "ms without response"));
+                                }
+                            });
+                    Disposable old = timeoutTimer.getAndSet(d);
+                    if (old != null) old.dispose();
+                };
+
+                scheduleTimeout.accept(isInvite ? "Timer B" : "Timer F");
+
+                Bootstrap bootstrap = new Bootstrap();
+                bootstrap.group(clientTcpGroup)
+                        .channel(NioSocketChannel.class)
+                        .option(ChannelOption.TCP_NODELAY, true)
+                        .handler(new ChannelInitializer<SocketChannel>() {
+                            @Override
+                            protected void initChannel(SocketChannel ch) {
+                                if (clientSslContext != null) {
+                                    ch.pipeline().addLast("ssl", clientSslContext.newHandler(ch.alloc(), destination.getHostString(), destination.getPort()));
+                                }
+                                ch.pipeline().addLast("streamDecoder", new SipStreamFrameDecoder(server.getParser()));
+                                ch.pipeline().addLast("streamEncoder", new SipStreamEncoder(server.getEncoder()));
+                                ch.pipeline().addLast("clientHandler", new SimpleChannelInboundHandler<SipMessage>() {
+                                    @Override
+                                    protected void channelRead0(ChannelHandlerContext ctx, SipMessage msg) {
+                                        if (msg instanceof SipResponse resp) {
+                                            if (resp.isProvisional()) {
+                                                if (isInvite) {
+                                                    Disposable currentTimeout = timeoutTimer.getAndSet(null);
+                                                    if (currentTimeout != null) currentTimeout.dispose();
+
+                                                    if (configuration.getRingTimeoutMs() > 0 && ringTimeoutStarted.compareAndSet(false, true)) {
+                                                        scheduleTimeout.accept("Ring timeout");
+                                                    }
+                                                }
+                                                sink.next(resp);
+                                            } else if (resp.isFinal()) {
+                                                finalResponseReceived.set(true);
+                                                Disposable currentTimeout = timeoutTimer.getAndSet(null);
+                                                if (currentTimeout != null) currentTimeout.dispose();
+
+                                                sink.next(resp);
+                                                sink.complete();
+                                                ctx.close();
+                                            }
+                                        }
+                                    }
+
+                                    @Override
+                                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                                        Disposable currentTimeout = timeoutTimer.getAndSet(null);
+                                        if (currentTimeout != null) currentTimeout.dispose();
+                                        LOG.error("Client TLS error from {}: {}", destination, cause.getMessage());
+                                        sink.error(cause);
+                                        ctx.close();
+                                    }
+                                });
+                            }
+                        });
+
+                ChannelFuture connectFuture = bootstrap.connect(destination);
+                connectFuture.addListener((ChannelFutureListener) future -> {
+                    if (future.isSuccess()) {
+                        Channel ch = future.channel();
+                        channelRef.set(ch);
+                        sink.onDispose(() -> {
+                            Disposable t = timeoutTimer.getAndSet(null);
+                            if (t != null) t.dispose();
+                            if (ch.isOpen()) ch.close();
+                        });
+                        ch.writeAndFlush(request);
+                    } else {
+                        Disposable t = timeoutTimer.getAndSet(null);
+                        if (t != null) t.dispose();
+                        sink.error(future.cause());
+                    }
+                });
+            } catch (Exception e) {
+                sink.error(e);
+            }
+        });
+    }
+
     /**
      * Sends a SIP request one-way (without registering a transaction listener or waiting for response, e.g. ACK).
      */
@@ -418,6 +601,25 @@ public class ReactiveSipClient {
                     .handler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast("streamEncoder", new SipStreamEncoder(server.getEncoder()));
+                        }
+                    });
+            bootstrap.connect(destination).addListener((ChannelFutureListener) future -> {
+                if (future.isSuccess()) {
+                    future.channel().writeAndFlush(request).addListener(f -> future.channel().close());
+                }
+            });
+        } else if (transport == SipTransport.TLS) {
+            Bootstrap bootstrap = new Bootstrap();
+            bootstrap.group(clientTcpGroup)
+                    .channel(NioSocketChannel.class)
+                    .option(ChannelOption.TCP_NODELAY, true)
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            if (clientSslContext != null) {
+                                ch.pipeline().addLast("ssl", clientSslContext.newHandler(ch.alloc(), destination.getHostString(), destination.getPort()));
+                            }
                             ch.pipeline().addLast("streamEncoder", new SipStreamEncoder(server.getEncoder()));
                         }
                     });
@@ -473,6 +675,9 @@ public class ReactiveSipClient {
                               String body,
                               String contentType,
                               SipTransport transport) {
+        if (transport == SipTransport.TLS) {
+            return sendAckTls(originalInvite, okResponse, destination, body, contentType);
+        }
         if (transport == SipTransport.TCP) {
             return sendAckTcp(originalInvite, okResponse, destination, body, contentType);
         }
@@ -480,6 +685,44 @@ public class ReactiveSipClient {
         return Mono.fromRunnable(() -> {
             SipRequest ack = buildAck(originalInvite, okResponse, SipTransport.UDP, body, contentType);
             server.sendUdp(ack, destination);
+        });
+    }
+
+    public Mono<Void> sendAckTls(SipRequest originalInvite, SipResponse okResponse, InetSocketAddress destination) {
+        return sendAckTls(originalInvite, okResponse, destination, null, null);
+    }
+
+    public Mono<Void> sendAckTls(SipRequest originalInvite,
+                                 SipResponse okResponse,
+                                 InetSocketAddress destination,
+                                 String body,
+                                 String contentType) {
+        return Mono.create(sink -> {
+            SipRequest ack = buildAck(originalInvite, okResponse, SipTransport.TLS, body, contentType);
+            Bootstrap bootstrap = new Bootstrap();
+            bootstrap.group(clientTcpGroup)
+                    .channel(NioSocketChannel.class)
+                    .option(ChannelOption.TCP_NODELAY, true)
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            if (clientSslContext != null) {
+                                ch.pipeline().addLast("ssl", clientSslContext.newHandler(ch.alloc(), destination.getHostString(), destination.getPort()));
+                            }
+                            ch.pipeline().addLast("streamEncoder", new SipStreamEncoder(server.getEncoder()));
+                        }
+                    });
+
+            bootstrap.connect(destination).addListener((ChannelFutureListener) future -> {
+                if (future.isSuccess()) {
+                    future.channel().writeAndFlush(ack).addListener(f -> {
+                        future.channel().close();
+                        sink.success();
+                    });
+                } else {
+                    sink.error(future.cause());
+                }
+            });
         });
     }
 
@@ -661,7 +904,14 @@ public class ReactiveSipClient {
     }
 
     public Mono<SipResponse> sendDtmfMessage(String targetUri, DtmfSignal signal, InetSocketAddress destination, SipTransport transport) {
-        int localPort = (transport == SipTransport.TCP) ? server.getTcpPort() : server.getUdpPort();
+        int localPort;
+        if (transport == SipTransport.TLS) {
+            localPort = server.getTlsPort();
+        } else if (transport == SipTransport.TCP) {
+            localPort = server.getTcpPort();
+        } else {
+            localPort = server.getUdpPort();
+        }
         SipRequest msg = SipRequest.builder(SipMethod.MESSAGE, targetUri)
                 .from("<sip:client@127.0.0.1:" + localPort + ">;tag=" + UUID.randomUUID().toString().substring(0, 8))
                 .to("<" + targetUri + ">")
@@ -706,7 +956,14 @@ public class ReactiveSipClient {
         ackHeaders.setCSeq(seq + " ACK");
         ackHeaders.setMaxForwards(70);
 
-        int localPort = (transport == SipTransport.TCP) ? server.getTcpPort() : server.getUdpPort();
+        int localPort;
+        if (transport == SipTransport.TLS) {
+            localPort = server.getTlsPort();
+        } else if (transport == SipTransport.TCP) {
+            localPort = server.getTcpPort();
+        } else {
+            localPort = server.getUdpPort();
+        }
         String newBranch = "z9hG4bK" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         ackHeaders.addVia(transport.getViaProtocol() + " 127.0.0.1:" + localPort + ";branch=" + newBranch);
 
@@ -725,7 +982,14 @@ public class ReactiveSipClient {
     private void prepareHeaders(SipRequest request, InetSocketAddress destination, SipTransport transport) {
         request.setTransport(transport);
         SipHeaders headers = request.getHeaders();
-        int localPort = (transport == SipTransport.TCP) ? server.getTcpPort() : server.getUdpPort();
+        int localPort;
+        if (transport == SipTransport.TLS) {
+            localPort = server.getTlsPort();
+        } else if (transport == SipTransport.TCP) {
+            localPort = server.getTcpPort();
+        } else {
+            localPort = server.getUdpPort();
+        }
         String hostPort = "127.0.0.1:" + localPort;
 
         if (request.getCallId() == null) {
@@ -777,6 +1041,9 @@ public class ReactiveSipClient {
 
         SipUri uri = request.getUri();
         if (uri != null) {
+            if ("sips".equalsIgnoreCase(uri.getScheme())) {
+                return SipTransport.TLS;
+            }
             SipTransport fromUri = parseTransportToken(uri.getParameter("transport"));
             if (fromUri != null) {
                 return fromUri;

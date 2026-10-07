@@ -396,8 +396,9 @@ class SipIntegrationTest {
 
     @Test
     void testRegisterFlowWithExplicitUriParam() {
-        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
-        SipRequest register = SipRequest.builder(SipMethod.REGISTER, "sip:127.0.0.1:" + server.getPort() + ";transport=tls")
+        int tlsPort = server.getTlsPort();
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", tlsPort);
+        SipRequest register = SipRequest.builder(SipMethod.REGISTER, "sip:127.0.0.1:" + tlsPort + ";transport=tls")
                 .from("<sip:charlie@127.0.0.1>;tag=reg456")
                 .to("<sip:charlie@127.0.0.1>")
                 .build();
