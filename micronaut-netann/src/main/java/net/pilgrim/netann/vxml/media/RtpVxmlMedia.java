@@ -47,6 +47,39 @@ public class RtpVxmlMedia implements VxmlMedia {
         return bargeInAllowed.get();
     }
 
+    @Override
+    public void setDtmfListener(java.util.function.Consumer<Character> listener) {
+        mediaSession.addDtmfListener(listener);
+    }
+
+    @Override
+    public void startRecording() {
+        mediaSession.startRecording();
+    }
+
+    @Override
+    public byte[] stopRecording() {
+        net.pilgrim.sip.rtp.media.AudioRecording recording = mediaSession.stopRecording();
+        return recording != null ? recording.getPcmData() : new byte[0];
+    }
+
+    @Override
+    public boolean isRecording() {
+        return mediaSession.isRecording();
+    }
+
+    @Override
+    public void sendDtmf(char digit) {
+        mediaSession.sendDtmf(digit).subscribe();
+    }
+
+    /**
+     * Stops the active recording and returns the full {@link net.pilgrim.sip.rtp.media.AudioRecording} metadata.
+     */
+    public net.pilgrim.sip.rtp.media.AudioRecording stopAudioRecording() {
+        return mediaSession.stopRecording();
+    }
+
     public RtpMediaSession getMediaSession() {
         return mediaSession;
     }

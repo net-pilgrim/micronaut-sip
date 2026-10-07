@@ -60,6 +60,14 @@ public final class RtpPacketizer {
         return timestamp.get();
     }
 
+    public int getAndAdvanceSequenceNumber(int delta) {
+        return sequenceNumber.getAndUpdate(val -> (val + delta) & 0xFFFF);
+    }
+
+    public long getAndAdvanceTimestamp(long delta) {
+        return timestamp.getAndUpdate(val -> (val + delta) & 0xFFFF_FFFFL);
+    }
+
     public RtpPacket packetize(byte[] encodedPayload, int sampleCount, boolean marker) {
         Objects.requireNonNull(encodedPayload, "encodedPayload");
         if (sampleCount <= 0) {

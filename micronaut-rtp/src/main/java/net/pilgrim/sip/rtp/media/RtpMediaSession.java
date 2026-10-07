@@ -18,9 +18,12 @@ import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Consumer;
 
 /**
  * Manages the active bidirectional media stream for a single call session.
@@ -48,7 +51,14 @@ public final class RtpMediaSession implements Closeable {
     private final LongAdder bytesSent = new LongAdder();
     private final LongAdder bytesReceived = new LongAdder();
 
-    private final java.util.concurrent.atomic.AtomicReference<RtpAudioPlayer> activePlayer = new java.util.concurrent.atomic.AtomicReference<>();
+    private final AtomicReference<RtpAudioPlayer> activePlayer = new AtomicReference<>();
+    private final AtomicReference<AudioRecorder> activeRecorder = new AtomicReference<>();
+
+    private final Rfc4733DtmfHandler rfc4733Handler = new Rfc4733DtmfHandler();
+    private final GoertzelDtmfDetector inbandDtmfDetector = new GoertzelDtmfDetector();
+    private final List<Consumer<Character>> dtmfListeners = new CopyOnWriteArrayList<>();
+    private volatile int telephoneEventPayloadType = Rfc4733DtmfHandler.DEFAULT_PAYLOAD_TYPE;
+    private volatile boolean inbandDtmfEnabled = true;
 
     public RtpMediaSession(String callId,
                            int localPort,
@@ -65,6 +75,8 @@ public final class RtpMediaSession implements Closeable {
         this.codec = initialCodec != null ? initialCodec : new G711UlawCodec();
         this.remoteAddress = initialRemoteAddress;
         this.packetizer = new RtpPacketizer(codec.payloadType(), codec.clockRate());
+        this.rfc4733Handler.addListener(this::notifyDtmfListeners);
+        this.inbandDtmfDetector.addListener(this::notifyDtmfListeners);
     }
 
     public String getCallId() {
@@ -161,12 +173,34 @@ public final class RtpMediaSession implements Closeable {
         if (remoteAddress == null) {
             this.remoteAddress = inbound.senderAddress();
         }
-        if (!inboundProcessors.isEmpty()) {
+
+        // 1. Check for RFC 4733 telephone-event payload
+        if (inbound.packet().getPayloadType() == telephoneEventPayloadType) {
+            try {
+                rfc4733Handler.processPacket(inbound.packet());
+            } catch (Throwable t) {
+                LOG.warn("Error processing RFC 4733 packet on Call-ID: {}", callId, t);
+            }
+            incomingSink.tryEmitNext(inbound);
+            return;
+        }
+
+        // 2. Decode audio frame for processors and inband DTMF detector
+        if (!inboundProcessors.isEmpty() || inbandDtmfEnabled) {
             try {
                 byte[] pcm = codec.decodeToPcm16Le(inbound.packet().getPayload());
                 AudioFrame frame = new AudioFrame(callId, pcm, codec.clockRate(), 1,
                         inbound.packet().getTimestamp(), inbound.packet().getSequenceNumber(),
                         AudioFrame.Direction.INBOUND);
+
+                if (inbandDtmfEnabled) {
+                    try {
+                        inbandDtmfDetector.process(frame);
+                    } catch (Throwable t) {
+                        LOG.warn("GoertzelDtmfDetector error on Call-ID: {}", callId, t);
+                    }
+                }
+
                 for (AudioProcessor processor : inboundProcessors) {
                     try {
                         processor.process(frame);
@@ -279,10 +313,154 @@ public final class RtpMediaSession implements Closeable {
         return closed.get();
     }
 
+    // =========================================================================
+    // Recording API
+    // =========================================================================
+
+    /**
+     * Starts recording media stream audio in both directions.
+     */
+    public synchronized AudioRecorder startRecording() {
+        return startRecording(AudioRecorder.DirectionFilter.BOTH, 0);
+    }
+
+    /**
+     * Starts recording media stream audio with a direction filter.
+     */
+    public synchronized AudioRecorder startRecording(AudioRecorder.DirectionFilter directionFilter) {
+        return startRecording(directionFilter, 0);
+    }
+
+    /**
+     * Starts recording media stream audio with a direction filter and maximum duration.
+     */
+    public synchronized AudioRecorder startRecording(AudioRecorder.DirectionFilter directionFilter, long maxDurationMs) {
+        stopRecording();
+        AudioRecorder recorder = new AudioRecorder(callId, directionFilter, maxDurationMs);
+        if (directionFilter == AudioRecorder.DirectionFilter.INBOUND_ONLY || directionFilter == AudioRecorder.DirectionFilter.BOTH) {
+            addInboundProcessor(recorder);
+        }
+        if (directionFilter == AudioRecorder.DirectionFilter.OUTBOUND_ONLY || directionFilter == AudioRecorder.DirectionFilter.BOTH) {
+            addOutboundProcessor(recorder);
+        }
+        recorder.start();
+        activeRecorder.set(recorder);
+        return recorder;
+    }
+
+    /**
+     * Stops the active recording (if any) and returns the captured audio.
+     */
+    public synchronized AudioRecording stopRecording() {
+        AudioRecorder recorder = activeRecorder.getAndSet(null);
+        if (recorder != null) {
+            removeAudioProcessor(recorder);
+            return recorder.stop();
+        }
+        return null;
+    }
+
+    public boolean isRecording() {
+        AudioRecorder recorder = activeRecorder.get();
+        return recorder != null && recorder.isRecording();
+    }
+
+    public AudioRecorder getActiveRecorder() {
+        return activeRecorder.get();
+    }
+
+    // =========================================================================
+    // DTMF API
+    // =========================================================================
+
+    public void addDtmfListener(Consumer<Character> listener) {
+        if (listener != null && !dtmfListeners.contains(listener)) {
+            dtmfListeners.add(listener);
+        }
+    }
+
+    public void removeDtmfListener(Consumer<Character> listener) {
+        if (listener != null) {
+            dtmfListeners.remove(listener);
+        }
+    }
+
+    public void clearDtmfListeners() {
+        dtmfListeners.clear();
+    }
+
+    public void notifyDtmfListeners(char digit) {
+        for (Consumer<Character> listener : dtmfListeners) {
+            try {
+                listener.accept(digit);
+            } catch (Throwable t) {
+                LOG.error("Error in DTMF listener on Call-ID: {}", callId, t);
+            }
+        }
+    }
+
+    public int getTelephoneEventPayloadType() {
+        return telephoneEventPayloadType;
+    }
+
+    public void setTelephoneEventPayloadType(int telephoneEventPayloadType) {
+        this.telephoneEventPayloadType = telephoneEventPayloadType;
+    }
+
+    public boolean isInbandDtmfEnabled() {
+        return inbandDtmfEnabled;
+    }
+
+    public void setInbandDtmfEnabled(boolean inbandDtmfEnabled) {
+        this.inbandDtmfEnabled = inbandDtmfEnabled;
+    }
+
+    public GoertzelDtmfDetector getInbandDtmfDetector() {
+        return inbandDtmfDetector;
+    }
+
+    public Rfc4733DtmfHandler getRfc4733Handler() {
+        return rfc4733Handler;
+    }
+
+    /**
+     * Sends DTMF event via RFC 4733 telephone-event RTP packets.
+     */
+    public Mono<Void> sendTelephoneEvent(char digit, int durationMs) {
+        int initialSeq = packetizer.getCurrentSequenceNumber();
+        long timestamp = packetizer.getCurrentTimestamp();
+        List<RtpPacket> packets = Rfc4733DtmfHandler.createPacketSequence(
+                digit, durationMs, telephoneEventPayloadType, codec.clockRate(),
+                packetizer.getSsrc(), initialSeq, timestamp);
+
+        packetizer.getAndAdvanceSequenceNumber(packets.size());
+        packetizer.getAndAdvanceTimestamp((codec.clockRate() * Math.max(40, durationMs)) / 1000);
+
+        return Flux.fromIterable(packets)
+                .concatMap(this::sendPacket)
+                .then();
+    }
+
+    /**
+     * Sends DTMF digit over the media stream (default RFC 4733 telephone-event).
+     */
+    public Mono<Void> sendDtmf(char digit) {
+        return sendTelephoneEvent(digit, 100);
+    }
+
+    /**
+     * Generates and plays dual-tone DTMF audio inband over the media channel.
+     */
+    public void sendDtmfTone(char digit, int durationMs) {
+        byte[] pcm = DtmfToneGenerator.generateTone(digit, durationMs, codec.clockRate());
+        playAudio(pcm, null);
+    }
+
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
             stopAudio();
+            stopRecording();
             incomingSink.tryEmitComplete();
             channel.close().addListener(f -> portManager.releasePort(localPort));
         }
