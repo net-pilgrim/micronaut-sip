@@ -48,6 +48,8 @@ public final class RtpMediaSession implements Closeable {
     private final LongAdder bytesSent = new LongAdder();
     private final LongAdder bytesReceived = new LongAdder();
 
+    private final java.util.concurrent.atomic.AtomicReference<RtpAudioPlayer> activePlayer = new java.util.concurrent.atomic.AtomicReference<>();
+
     public RtpMediaSession(String callId,
                            int localPort,
                            Channel channel,
@@ -241,6 +243,38 @@ public final class RtpMediaSession implements Closeable {
         return bytesReceived.sum();
     }
 
+    public synchronized void playAudio(byte[] pcmAudio, Runnable onComplete) {
+        stopAudio();
+        if (pcmAudio == null || pcmAudio.length == 0) {
+            if (onComplete != null) {
+                onComplete.run();
+            }
+            return;
+        }
+        java.util.concurrent.atomic.AtomicReference<RtpAudioPlayer> ref = new java.util.concurrent.atomic.AtomicReference<>();
+        RtpAudioPlayer player = new RtpAudioPlayer(this, pcmAudio, () -> {
+            activePlayer.compareAndSet(ref.get(), null);
+            if (onComplete != null) {
+                onComplete.run();
+            }
+        });
+        ref.set(player);
+        activePlayer.set(player);
+        player.start();
+    }
+
+    public synchronized void stopAudio() {
+        RtpAudioPlayer player = activePlayer.getAndSet(null);
+        if (player != null) {
+            player.stop();
+        }
+    }
+
+    public boolean isAudioPlaying() {
+        RtpAudioPlayer player = activePlayer.get();
+        return player != null && player.isRunning();
+    }
+
     public boolean isClosed() {
         return closed.get();
     }
@@ -248,6 +282,7 @@ public final class RtpMediaSession implements Closeable {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            stopAudio();
             incomingSink.tryEmitComplete();
             channel.close().addListener(f -> portManager.releasePort(localPort));
         }

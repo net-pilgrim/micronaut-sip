@@ -7,7 +7,11 @@ import net.pilgrim.netann.config.NetannConfiguration;
 import net.pilgrim.netann.service.AnnouncementAudioLoader;
 import net.pilgrim.vxml.ast.VxmlDocument;
 import net.pilgrim.vxml.loader.VxmlDocumentLoader;
+import net.pilgrim.netann.vxml.media.RtpVxmlMedia;
+import net.pilgrim.netann.vxml.media.RtpVxmlMediaFactory;
+import net.pilgrim.netann.vxml.media.VxmlMediaFactory;
 import net.pilgrim.netann.vxml.runtime.VxmlAudioPlayer;
+import net.pilgrim.vxml.media.VxmlMedia;
 import net.pilgrim.vxml.runtime.VxmlOutputSink;
 import net.pilgrim.vxml.runtime.VxmlSession;
 import net.pilgrim.vxml.speech.DefaultTtsClient;
@@ -56,6 +60,7 @@ public class VxmlController {
     private final SipNettyServer sipServer;
     private final SipSessionManager sessionManager;
     private final NetannConfiguration config;
+    private final VxmlMediaFactory mediaFactory;
     private final SdpNegotiator sdpNegotiator = new SdpNegotiator();
     private final SdpParser sdpParser = new SdpParser();
 
@@ -71,7 +76,8 @@ public class VxmlController {
                           @Nullable TtsClient ttsClient,
                           SipNettyServer sipServer,
                           SipSessionManager sessionManager,
-                          @Nullable NetannConfiguration config) {
+                          @Nullable NetannConfiguration config,
+                          @Nullable VxmlMediaFactory mediaFactory) {
         this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
         this.documentLoader = documentLoader != null ? documentLoader : new VxmlDocumentLoader();
         this.audioLoader = audioLoader != null ? audioLoader : new AnnouncementAudioLoader();
@@ -79,6 +85,7 @@ public class VxmlController {
         this.sipServer = sipServer;
         this.sessionManager = sessionManager;
         this.config = config != null ? config : new NetannConfiguration();
+        this.mediaFactory = mediaFactory != null ? mediaFactory : new RtpVxmlMediaFactory();
     }
 
     // ==========================================
@@ -272,50 +279,21 @@ public class VxmlController {
             return;
         }
 
-        AtomicBoolean bargeInAllowed = new AtomicBoolean(true);
+        VxmlMedia media = mediaFactory.createMedia(callId, mediaSession);
 
-        VxmlOutputSink outputSink = new VxmlOutputSink() {
+        // Maintain activePlayers mapping for telemetry/testing compatibility
+        VxmlAudioPlayer playerAdapter = new VxmlAudioPlayer(mediaSession, new byte[0], null) {
             @Override
-            public void playAudio(byte[] pcmAudio, boolean bargeIn, Runnable onFinished) {
-                bargeInAllowed.set(bargeIn);
-                stopAudio();
-                if (pcmAudio == null || pcmAudio.length == 0) {
-                    if (onFinished != null) onFinished.run();
-                    return;
-                }
-                VxmlAudioPlayer player = new VxmlAudioPlayer(mediaSession, pcmAudio, () -> {
-                    activePlayers.remove(callId);
-                    if (onFinished != null) onFinished.run();
-                });
-                activePlayers.put(callId, player);
-                player.start();
+            public boolean isRunning() {
+                return media.isAudioPlaying();
             }
 
             @Override
-            public void stopAudio() {
-                VxmlAudioPlayer player = activePlayers.remove(callId);
-                if (player != null) {
-                    player.stop();
-                }
-            }
-
-            @Override
-            public boolean isAudioPlaying() {
-                VxmlAudioPlayer player = activePlayers.get(callId);
-                return player != null && player.isRunning();
-            }
-
-            @Override
-            public boolean isBargeInAllowed() {
-                return bargeInAllowed.get();
-            }
-
-            @Override
-            public void onDialogComplete() {
-                LOG.info("VoiceXML dialog finished for Call-ID: {}. Terminating call with in-dialog BYE.", callId);
-                terminateAndSendBye(callId, session, originalInvite, originalOk);
+            public void stop() {
+                media.stopAudio();
             }
         };
+        activePlayers.put(callId, playerAdapter);
 
         VxmlSession vxmlSession = new VxmlSession(
                 callId,
@@ -324,7 +302,11 @@ public class VxmlController {
                 documentLoader,
                 audioLoader,
                 ttsClient,
-                outputSink
+                media,
+                () -> {
+                    LOG.info("VoiceXML dialog finished for Call-ID: {}. Terminating call with in-dialog BYE.", callId);
+                    terminateAndSendBye(callId, session, originalInvite, originalOk);
+                }
         );
 
         activeSessions.put(callId, vxmlSession);
@@ -524,5 +506,9 @@ public class VxmlController {
 
     public Map<String, VxmlAudioPlayer> getActivePlayers() {
         return activePlayers;
+    }
+
+    public VxmlMediaFactory getMediaFactory() {
+        return mediaFactory;
     }
 }

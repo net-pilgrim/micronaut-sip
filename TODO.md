@@ -67,8 +67,8 @@ This backlog is based on current implementation gaps visible in `micronaut-sip`,
 
 12. ~~**Implement minimal VoiceXML 2.1 interpreter (DTMF-first) from grammar/schema subset & extract as top library module**~~ [DONE]
    - **Why:** Fastest path to practical IVR/dialog support without full external interpreter coupling; extracted into a standalone, protocol-neutral library module `:micronaut-vxml`.
-   - **Where:** new `:micronaut-vxml` library module (AST, XML parser, ECMAScript loose evaluator, grammar matcher, document loader, audio loader, FIA runtime session, abstract speech interfaces) consumed by `micronaut-netann` (`VxmlController` + `VxmlAudioPlayer`).
-   - **Done when:** Supports core subset (`form/field/prompt/choice/goto/if`, basic grammars), extracted as `:micronaut-vxml`, and executes dialogs over current SIP/RTP stack in `micronaut-netann`.
+   - **Where:** new `:micronaut-vxml` library module (AST, XML parser, ECMAScript loose evaluator, grammar matcher, document loader, audio loader, FIA runtime session, abstract speech interfaces, decoupled `VxmlMedia` interface) consumed by `micronaut-netann` (`VxmlController` + `RtpVxmlMedia`).
+   - **Done when:** Supports core subset (`form/field/prompt/choice/goto/if`, basic grammars), extracted as `:micronaut-vxml`, and executes dialogs with media injected via `:micronaut-rtp` in `micronaut-netann`.
 
 13. **Add MRCP adapter layer for ASR/TTS backends (Whisper for ASR, separate TTS engine)**
    - **Why:** Preserve interpreter neutrality while enabling model/provider swaps.

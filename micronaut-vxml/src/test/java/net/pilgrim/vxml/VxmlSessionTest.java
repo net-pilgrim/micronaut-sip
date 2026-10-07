@@ -129,6 +129,130 @@ public class VxmlSessionTest {
         assertEquals(VxmlSession.State.TERMINATED, session.getState());
     }
 
+    @Test
+    void testDecoupledVxmlMediaInjection() throws Exception {
+        String xml = """
+                <vxml version="2.1">
+                  <form id="f1">
+                    <block>
+                      <prompt>Welcome to test</prompt>
+                      <exit/>
+                    </block>
+                  </form>
+                </vxml>
+                """;
+
+        VxmlDocument doc = parser.parse(xml);
+        AtomicBoolean dialogCompleted = new AtomicBoolean(false);
+        AtomicInteger audioPlayCount = new AtomicInteger(0);
+
+        net.pilgrim.vxml.media.VxmlMedia mockMedia = new net.pilgrim.vxml.media.VxmlMedia() {
+            private final AtomicBoolean playing = new AtomicBoolean(false);
+
+            @Override
+            public void playAudio(byte[] pcmAudio, boolean bargeIn, Runnable onFinished) {
+                audioPlayCount.incrementAndGet();
+                playing.set(true);
+                if (onFinished != null) onFinished.run();
+                playing.set(false);
+            }
+
+            @Override
+            public void stopAudio() {
+                playing.set(false);
+            }
+
+            @Override
+            public boolean isAudioPlaying() {
+                return playing.get();
+            }
+
+            @Override
+            public boolean isBargeInAllowed() {
+                return true;
+            }
+        };
+
+        net.pilgrim.vxml.runtime.VxmlInterpreter interpreter = VxmlSession.builder()
+                .callId("call-media-inject-1")
+                .document(doc)
+                .documentUri("inline:f1")
+                .media(mockMedia)
+                .onDialogComplete(() -> dialogCompleted.set(true))
+                .build();
+
+        assertSame(mockMedia, interpreter.getMedia());
+        interpreter.start();
+
+        assertTrue(dialogCompleted.get());
+        assertTrue(audioPlayCount.get() > 0);
+        assertEquals(VxmlSession.State.TERMINATED, interpreter.getState());
+    }
+
+    @Test
+    void testSetMediaRuntimeInjection() throws Exception {
+        String xml = """
+                <vxml version="2.1">
+                  <form id="f1">
+                    <field name="choice" type="digits?length=1">
+                      <prompt>Please press 1</prompt>
+                      <filled>
+                        <exit/>
+                      </filled>
+                    </field>
+                  </form>
+                </vxml>
+                """;
+
+        VxmlDocument doc = parser.parse(xml);
+        AtomicBoolean dialogCompleted = new AtomicBoolean(false);
+        AtomicBoolean stopCalled = new AtomicBoolean(false);
+
+        VxmlSession session = new VxmlSession("call-media-set-1", doc, "inline:f1", null, null, null,
+                (net.pilgrim.vxml.media.VxmlMedia) null, () -> dialogCompleted.set(true));
+
+        assertNotNull(session.getMedia()); // defaults to NOOP
+
+        net.pilgrim.vxml.media.VxmlMedia newMedia = new net.pilgrim.vxml.media.VxmlMedia() {
+            private volatile boolean playing = false;
+
+            @Override
+            public void playAudio(byte[] pcmAudio, boolean bargeIn, Runnable onFinished) {
+                playing = true;
+            }
+
+            @Override
+            public void stopAudio() {
+                playing = false;
+                stopCalled.set(true);
+            }
+
+            @Override
+            public boolean isAudioPlaying() {
+                return playing;
+            }
+
+            @Override
+            public boolean isBargeInAllowed() {
+                return true;
+            }
+        };
+
+        session.setMedia(newMedia);
+        assertSame(newMedia, session.getMedia());
+
+        session.start();
+        assertEquals(VxmlSession.State.WAITING_FOR_INPUT, session.getState());
+        assertTrue(newMedia.isAudioPlaying());
+
+        // Send DTMF '1' which should trigger barge-in stopAudio() and fill field
+        session.onDtmf('1');
+
+        assertTrue(stopCalled.get());
+        assertTrue(dialogCompleted.get());
+        assertEquals(VxmlSession.State.TERMINATED, session.getState());
+    }
+
     private static class StubOutputSink implements VxmlOutputSink {
         private final Runnable onDialogCompleteCb;
         private final AtomicBoolean playing = new AtomicBoolean(false);

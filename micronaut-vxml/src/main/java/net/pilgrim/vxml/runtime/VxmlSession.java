@@ -8,6 +8,7 @@ import net.pilgrim.vxml.loader.DefaultVxmlAudioLoader;
 import net.pilgrim.vxml.loader.VxmlAudioLoader;
 import net.pilgrim.vxml.loader.VxmlDocumentLoader;
 import net.pilgrim.vxml.speech.TtsClient;
+import net.pilgrim.vxml.media.VxmlMedia;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * State machine and Form Interpretation Algorithm (FIA) execution engine
  * for an active VoiceXML 2.1 session bound to a SIP Call-ID.
  */
-public class VxmlSession {
+public class VxmlSession implements VxmlInterpreter {
 
     private static final Logger LOG = LoggerFactory.getLogger(VxmlSession.class);
 
@@ -44,7 +45,8 @@ public class VxmlSession {
     private final VxmlAudioLoader audioLoader;
     private final TtsClient ttsClient;
     private final VxmlGrammarMatcher grammarMatcher;
-    private final VxmlOutputSink outputSink;
+    private volatile VxmlMedia media;
+    private final Runnable onDialogComplete;
 
     private final Map<String, Object> documentScope = new ConcurrentHashMap<>();
     private final Map<String, Object> dialogScope = new ConcurrentHashMap<>();
@@ -66,15 +68,39 @@ public class VxmlSession {
                        VxmlDocumentLoader documentLoader,
                        VxmlAudioLoader audioLoader,
                        TtsClient ttsClient,
-                       VxmlOutputSink outputSink) {
+                       VxmlMedia media,
+                       Runnable onDialogComplete) {
         this.callId = Objects.requireNonNull(callId, "callId cannot be null");
         this.currentDoc = Objects.requireNonNull(initialDoc, "initialDoc cannot be null");
         this.currentDocUri = initialDocUri;
         this.documentLoader = documentLoader != null ? documentLoader : new VxmlDocumentLoader();
         this.audioLoader = audioLoader != null ? audioLoader : new DefaultVxmlAudioLoader();
-        this.ttsClient = ttsClient;
+        this.ttsClient = ttsClient != null ? ttsClient : new net.pilgrim.vxml.speech.DefaultTtsClient();
         this.grammarMatcher = new VxmlGrammarMatcher();
-        this.outputSink = outputSink;
+        this.media = media != null ? media : VxmlMedia.noop();
+        this.onDialogComplete = onDialogComplete;
+        this.media.setDtmfListener(this::onDtmf);
+    }
+
+    public VxmlSession(String callId,
+                       VxmlDocument initialDoc,
+                       String initialDocUri,
+                       VxmlDocumentLoader documentLoader,
+                       VxmlAudioLoader audioLoader,
+                       TtsClient ttsClient,
+                       VxmlMedia media) {
+        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient, media, null);
+    }
+
+    public VxmlSession(String callId,
+                       VxmlDocument initialDoc,
+                       String initialDocUri,
+                       VxmlDocumentLoader documentLoader,
+                       VxmlAudioLoader audioLoader,
+                       TtsClient ttsClient,
+                       VxmlOutputSink outputSink) {
+        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient,
+                outputSink, outputSink != null ? outputSink::onDialogComplete : null);
     }
 
     public synchronized void start() {
@@ -174,8 +200,8 @@ public class VxmlSession {
                 state = State.WAITING_FOR_INPUT;
                 startNoInputTimer(timeoutMs);
 
-                if (promptAudio.length > 0 && outputSink != null) {
-                    outputSink.playAudio(promptAudio, bargeIn, () -> {
+                if (promptAudio.length > 0 && media != null) {
+                    media.playAudio(promptAudio, bargeIn, () -> {
                         // Prompt finished playing, no-input timer is ticking
                     });
                 }
@@ -226,9 +252,9 @@ public class VxmlSession {
                 digit, callId, activeField != null ? activeField.getName() : "none", state);
 
         // Barge-in check: stop audio if currently playing and barge-in allowed
-        if (outputSink != null && outputSink.isAudioPlaying()) {
-            if (outputSink.isBargeInAllowed()) {
-                outputSink.stopAudio();
+        if (media != null && media.isAudioPlaying()) {
+            if (media.isBargeInAllowed()) {
+                media.stopAudio();
             } else {
                 return; // Barge-in not permitted, ignore
             }
@@ -385,9 +411,9 @@ public class VxmlSession {
                 return FlowControl.exit();
             } else if (exec instanceof VxmlPrompt prompt) {
                 byte[] audio = renderPrompts(List.of(prompt));
-                if (audio.length > 0 && outputSink != null) {
+                if (audio.length > 0 && media != null) {
                     CountDownLatch latch = new CountDownLatch(1);
-                    outputSink.playAudio(audio, prompt.isBargeIn(), latch::countDown);
+                    media.playAudio(audio, prompt.isBargeIn(), latch::countDown);
                     try {
                         latch.await(5, TimeUnit.SECONDS);
                     } catch (InterruptedException ignored) {}
@@ -505,23 +531,140 @@ public class VxmlSession {
         state = State.TERMINATED;
         cancelNoInputTimer();
 
-        if (outputSink != null) {
-            outputSink.stopAudio();
-            outputSink.onDialogComplete();
+        if (media != null) {
+            media.stopAudio();
+        }
+        if (onDialogComplete != null) {
+            try {
+                onDialogComplete.run();
+            } catch (Throwable t) {
+                LOG.error("Error executing onDialogComplete callback for Call-ID: {}", callId, t);
+            }
         }
         LOG.info("VxmlSession terminated for Call-ID: {}", callId);
     }
 
+    @Override
+    public VxmlMedia getMedia() {
+        return media;
+    }
+
+    @Override
+    public void setMedia(VxmlMedia media) {
+        this.media = media != null ? media : VxmlMedia.noop();
+        this.media.setDtmfListener(this::onDtmf);
+    }
+
+    public Runnable getOnDialogComplete() {
+        return onDialogComplete;
+    }
+
+    public VxmlOutputSink getOutputSink() {
+        if (media instanceof VxmlOutputSink sink) {
+            return sink;
+        }
+        return new VxmlOutputSink() {
+            @Override
+            public void playAudio(byte[] pcmAudio, boolean bargeIn, Runnable onFinished) {
+                media.playAudio(pcmAudio, bargeIn, onFinished);
+            }
+
+            @Override
+            public void stopAudio() {
+                media.stopAudio();
+            }
+
+            @Override
+            public boolean isAudioPlaying() {
+                return media.isAudioPlaying();
+            }
+
+            @Override
+            public boolean isBargeInAllowed() {
+                return media.isBargeInAllowed();
+            }
+
+            @Override
+            public void onDialogComplete() {
+                if (onDialogComplete != null) {
+                    onDialogComplete.run();
+                }
+            }
+        };
+    }
+
+    @Override
     public State getState() {
         return state;
     }
 
+    @Override
     public Map<String, Object> getDocumentScope() {
         return Collections.unmodifiableMap(documentScope);
     }
 
+    @Override
     public Map<String, Object> getDialogScope() {
         return Collections.unmodifiableMap(dialogScope);
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public static class Builder {
+        private String callId;
+        private VxmlDocument document;
+        private String documentUri;
+        private VxmlDocumentLoader documentLoader;
+        private VxmlAudioLoader audioLoader;
+        private TtsClient ttsClient;
+        private VxmlMedia media;
+        private Runnable onDialogComplete;
+
+        public Builder callId(String callId) {
+            this.callId = callId;
+            return this;
+        }
+
+        public Builder document(VxmlDocument document) {
+            this.document = document;
+            return this;
+        }
+
+        public Builder documentUri(String documentUri) {
+            this.documentUri = documentUri;
+            return this;
+        }
+
+        public Builder documentLoader(VxmlDocumentLoader documentLoader) {
+            this.documentLoader = documentLoader;
+            return this;
+        }
+
+        public Builder audioLoader(VxmlAudioLoader audioLoader) {
+            this.audioLoader = audioLoader;
+            return this;
+        }
+
+        public Builder ttsClient(TtsClient ttsClient) {
+            this.ttsClient = ttsClient;
+            return this;
+        }
+
+        public Builder media(VxmlMedia media) {
+            this.media = media;
+            return this;
+        }
+
+        public Builder onDialogComplete(Runnable onDialogComplete) {
+            this.onDialogComplete = onDialogComplete;
+            return this;
+        }
+
+        public VxmlSession build() {
+            return new VxmlSession(callId, document, documentUri, documentLoader, audioLoader, ttsClient, media, onDialogComplete);
+        }
     }
 
     private static class FlowControl {
