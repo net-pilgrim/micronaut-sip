@@ -1,5 +1,9 @@
 package net.pilgrim.sip.session;
 
+import net.pilgrim.sip.model.SipRequest;
+import net.pilgrim.sip.model.SipResponse;
+import net.pilgrim.sip.session.state.*;
+
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.Instant;
@@ -7,7 +11,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Represents an active SIP session or dialog context.
+ * Represents an active SIP session or dialog context governed by a Harel Statechart.
  */
 public class SipSession {
 
@@ -22,7 +26,12 @@ public class SipSession {
     private String localTag;
     private String remoteTag;
     private InetSocketAddress remoteAddress;
-    private State state = State.INITIAL;
+
+    // Harel Statechart Core State & Orthogonal Regions
+    private volatile SipDialogState dialogState = new InitialDialogState();
+    private final SdpOfferAnswerContext offerAnswerContext = new SdpOfferAnswerContext();
+    private final ReliableProvisionalContext reliableContext = new ReliableProvisionalContext();
+
     private final Instant createdAt = Instant.now();
     private volatile Instant lastAccessedAt = Instant.now();
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
@@ -65,15 +74,92 @@ public class SipSession {
     }
 
     public State getState() {
-        return state;
+        return dialogState.getId();
     }
 
-    public void setState(State state) {
-        if (this.state == State.TERMINATED && state != State.TERMINATED) {
+    public SipDialogState getDialogState() {
+        return dialogState;
+    }
+
+    public void transitionTo(SipDialogState newState) {
+        if (this.dialogState.isTerminal() && !newState.isTerminal()) {
             // RFC 3261 §12.3: Once terminated, a dialog cannot transition back to any active state
             return;
         }
-        this.state = state;
+        this.dialogState = newState;
+        touch();
+    }
+
+    public void setState(State state) {
+        if (this.dialogState.isTerminal() && state != State.TERMINATED) {
+            // RFC 3261 §12.3: Once terminated, a dialog cannot transition back to any active state
+            return;
+        }
+        switch (state) {
+            case INITIAL -> transitionTo(new InitialDialogState());
+            case EARLY -> transitionTo(new EarlyDialogState());
+            case CONFIRMED -> transitionTo(new ConfirmedDialogState());
+            case TERMINATED -> transitionTo(new TerminatedDialogState());
+        }
+    }
+
+    // ==========================================
+    // Statechart Event Handlers
+    // ==========================================
+
+    public DialogTransitionResult handleInvite(SipRequest request, String sdpOffer) {
+        touch();
+        return dialogState.handleInvite(this, request, sdpOffer);
+    }
+
+    public DialogTransitionResult handleProvisional(SipResponse response) {
+        touch();
+        return dialogState.handleProvisional(this, response);
+    }
+
+    public DialogTransitionResult handleAck(SipRequest request, String sdpAnswer) {
+        touch();
+        return dialogState.handleAck(this, request, sdpAnswer);
+    }
+
+    public DialogTransitionResult handlePrack(SipRequest request, String rack, String prackBody) {
+        touch();
+        return dialogState.handlePrack(this, request, rack, prackBody);
+    }
+
+    public DialogTransitionResult handleBye(SipRequest request) {
+        touch();
+        return dialogState.handleBye(this, request);
+    }
+
+    public DialogTransitionResult handleCancel(SipRequest request) {
+        touch();
+        return dialogState.handleCancel(this, request);
+    }
+
+    public DialogTransitionResult handleTimeout(String reason) {
+        touch();
+        return dialogState.handleTimeout(this, reason);
+    }
+
+    public SdpOfferAnswerContext getOfferAnswerContext() {
+        return offerAnswerContext;
+    }
+
+    public ReliableProvisionalContext getReliableContext() {
+        return reliableContext;
+    }
+
+    public boolean isConfirmed() {
+        return getState() == State.CONFIRMED;
+    }
+
+    public boolean isEarly() {
+        return getState() == State.EARLY;
+    }
+
+    public boolean isTerminated() {
+        return getState() == State.TERMINATED;
     }
 
     public Instant getCreatedAt() {
@@ -83,13 +169,43 @@ public class SipSession {
     public void setAttribute(String key, Object value) {
         if (value == null) {
             attributes.remove(key);
-        } else {
-            attributes.put(key, value);
+            return;
+        }
+        attributes.put(key, value);
+        // Synchronize with typed orthogonal contexts
+        if ("sdpOffer".equals(key) && value instanceof String sdp) {
+            offerAnswerContext.setOffer(sdp);
+        } else if ("sdpAnswer".equals(key) && value instanceof String sdp) {
+            offerAnswerContext.setAnswer(sdp);
+        } else if ("localSdpOffer".equals(key) && value instanceof String sdp) {
+            offerAnswerContext.setLocalOffer(sdp);
+        } else if ("awaitingAckSdpAnswer".equals(key) && Boolean.TRUE.equals(value)) {
+            offerAnswerContext.setState(SdpOfferAnswerState.AWAITING_ACK_ANSWER);
+        } else if ("rseq".equals(key) && value instanceof Long r) {
+            reliableContext.initiate(r, 1L, "INVITE", (reactor.core.publisher.Sinks.One<Void>) attributes.get("prackSink"));
+        } else if ("prackSink".equals(key) && value instanceof reactor.core.publisher.Sinks.One sink) {
+            Long r = reliableContext.getRSeq() != null ? reliableContext.getRSeq() : (Long) attributes.get("rseq");
+            reliableContext.initiate(r != null ? r : 1L, 1L, "INVITE", (reactor.core.publisher.Sinks.One<Void>) sink);
         }
     }
 
     @SuppressWarnings("unchecked")
     public <T> T getAttribute(String key) {
+        if ("sdpOffer".equals(key)) {
+            String offer = offerAnswerContext.getOffer();
+            if (offer != null) return (T) offer;
+        } else if ("sdpAnswer".equals(key)) {
+            String answer = offerAnswerContext.getAnswer();
+            if (answer != null) return (T) answer;
+        } else if ("awaitingAckSdpAnswer".equals(key)) {
+            return (T) Boolean.valueOf(offerAnswerContext.isAwaitingAckAnswer());
+        } else if ("rseq".equals(key)) {
+            Long rseq = reliableContext.getRSeq();
+            if (rseq != null) return (T) rseq;
+        } else if ("prackSink".equals(key)) {
+            Object sink = reliableContext.getPrackSink();
+            if (sink != null) return (T) sink;
+        }
         return (T) attributes.get(key);
     }
 
