@@ -3,7 +3,7 @@
 A reactive [Micronaut](https://micronaut.io) multi-module Gradle project communicating over the **Session Initiation Protocol (SIP)** (RFC 3261) supporting **UDP**, **TCP**, and **TLS** transports powered by **Netty** and **Project Reactor**.
 
 [![CI](https://github.com/net-pilgrim/micronaut-sip/actions/workflows/ci.yml/badge.svg)](https://github.com/net-pilgrim/micronaut-sip/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-25-orange.svg)](https://openjdk.org/projects/jdk/25/)
 
 ---
