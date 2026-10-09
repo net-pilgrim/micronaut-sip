@@ -8,9 +8,6 @@ resources:
   - sip-app/configmap.yaml
   - sip-app/deployment.yaml
   - sip-app/service.yaml
-  - micronaut-netann/configmap.yaml
-  - micronaut-netann/deployment.yaml
-  - micronaut-netann/service.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: micronaut-sip

@@ -9,8 +9,8 @@ flowchart TD
     L4["<b>Layer 4: Performance & Load Benchmarks</b><br/>SIPp v3.7 sustained 15,000 calls @ 50 cps & 1,000 burst calls @ 200 cps<br/>+ Netem loss benchmarks (20% & 30% packet loss)"]
     L3["<b>Layer 3: Protocol Conformance Testing</b><br/>ETSI TS 102 027-2 specification suite executed via sip-tt (100% passing)"]
     L2B["<b>Layer 2.5: BDD & Gherkin Executable Specifications</b><br/>:micronaut-sip-bdd (Cucumber-JVM: RFC 3261 basic call, RFC 2617 auth, RFC 3262 PRACK)"]
-    L2["<b>Layer 2: Full-Stack Network Integration & Application Tests</b><br/>:sip-app (38 tests over Netty UDP, TCP, SDP, RTP & 100rel)<br/>:micronaut-netann (17 tests for RFC 4240 NetAnn announcement, security & RTP audio)"]
-    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (108 tests) | :micronaut-rtp (23 tests) | :micronaut-sdp (5 tests)"]
+    L2["<b>Layer 2: Full-Stack Network Integration & Application Tests</b><br/>:sip-app (65+ tests over Netty UDP, TCP, SDP, RTP, 100rel, RFC 4240 NetAnn, VoiceXML & Voicemail)"]
+    L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (108 tests) | :micronaut-rtp (23 tests) | :micronaut-sdp (5 tests) | :micronaut-vxml (25 tests)"]
     L4 --> L3
     L3 --> L2B
     L2B --> L2
@@ -49,8 +49,10 @@ flowchart TD
 | `:micronaut-rtp` | [`RtpAudioHookTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpAudioHookTest.java) | 6 | Inbound/outbound audio processing hooks, Goertzel dual-tone multifrequency detector, voice activity detection, and reactive PCM frame streaming |
 | `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 26 | Live UDP network call flows, RFC 3960 early-media in-band ringback, RFC 3262 100rel PRACK flow, mid-dialog INFO DTMF relay, late/early-offer SDP, dynamic RTP probe, netem packet drop resilience |
 | `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 10 | End-to-end TCP streaming call flows, RFC 3262 PRACK over TCP, TCP DTMF relay, framing reassembly, RFC 5626 keep-alive, TCP SDP/RTP integration |
-| `:micronaut-netann` | [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) | 9 | RFC 4240 NetAnn announcement service (`annc`), `play`/`repeat`/`delay`/`duration` parameters, 20ms RTP audio streaming, auto-`BYE`, error semantics (`400`, `404`, `488`), and TCP transport |
-| `:micronaut-netann` | [`AnnouncementSecurityAndNetworkingTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementSecurityAndNetworkingTest.java) | 8 | SSRF prevention (blocking private/loopback/metadata IPs), 10MB memory size caps, `repeat=forever` duration ceiling, per-IP concurrency throttling (`503`), and Contact port verification |
+| `:sip-app` | [`AnnouncementIntegrationTest`](../sip-app/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) | 9 | RFC 4240 NetAnn announcement service (`annc`), `play`/`repeat`/`delay`/`duration` parameters, 20ms RTP audio streaming, auto-`BYE`, error semantics (`400`, `404`, `488`), and TCP transport |
+| `:sip-app` | [`AnnouncementSecurityAndNetworkingTest`](../sip-app/src/test/java/net/pilgrim/netann/AnnouncementSecurityAndNetworkingTest.java) | 8 | SSRF prevention (blocking private/loopback/metadata IPs), 10MB memory size caps, `repeat=forever` duration ceiling, per-IP concurrency throttling (`503`), and Contact port verification |
+| `:sip-app` | [`MailboxIntegrationTest`](../sip-app/src/test/java/net/pilgrim/mailbox/MailboxIntegrationTest.java) | 4 | Answering machine call flows (`mailbox`, `<owner>+mailbox`), VoiceXML execution, DTMF `#` completion, and object storage persistence |
+| `:sip-app` | [`MailboxRecordingServiceTest`](../sip-app/src/test/java/net/pilgrim/mailbox/MailboxRecordingServiceTest.java) | 4 | Voicemail recording persistence in Object Storage, key conventions, and caller extraction |
 | `:micronaut-sip-bdd` | [`RunCucumberTest`](../micronaut-sip-bdd/src/test/java/net/pilgrim/sip/bdd/RunCucumberTest.java) | 5 Scenarios (70 steps) | Executable RFC 3261/3262/3960/2617 Gherkin specifications: basic audio call, early media session progress, digest authentication challenge, reliable provisional PRACK handshake, and call rejection |
 
 ---
@@ -312,9 +314,9 @@ flowchart TD
 
 ---
 
-### Detailed Breakdown: `:micronaut-netann` Integration Suites (9 Tests)
+### Detailed Breakdown: `:sip-app` NetAnn & Mailbox Suites
 
-#### 1. [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) (9 Tests)
+#### 1. [`AnnouncementIntegrationTest`](../sip-app/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) (9 Tests)
 - **`testSuccessfulAnnouncementPlaybackAndRtpStreaming`**: Validates complete RFC 4240 NetAnn announcement lifecycle: sends `INVITE sip:annc@...;play=tone:440` with SDP offer, verifies `200 OK` with negotiated SDP answer, sends `ACK`, and confirms reception of live 20ms G.711 $\mu$-law RTP audio packets over UDP.
 - **`testAnnouncementCompletionEmitsBye`**: Verifies RFC 4240 §2 termination: media server streams the entire configured audio prompt and automatically initiates call teardown by sending an in-dialog `BYE` request to the client upon playback completion.
 - **`testMissingPlayParameterReturns400`**: Enforces RFC 4240 §2 mandatory parameter validation: an `INVITE` to `sip:annc@...` lacking the mandatory `play=` parameter is immediately rejected with `400 Bad Request` and reason `"Mandatory play parameter missing"`.
@@ -329,7 +331,7 @@ flowchart TD
 
 ### Executing Automated Tests
 
-Execute all 182 tests across all 5 modules:
+Execute all tests across all modules:
 ```bash
 ./gradlew check test
 ```
@@ -349,28 +351,28 @@ Execute only the RTP media streaming test suite (`:micronaut-rtp`):
 ./gradlew :micronaut-rtp:test
 ```
 
-Execute only the network integration test suite (`:sip-app`):
+Execute only the VoiceXML dialog engine test suite (`:micronaut-vxml`):
 ```bash
-./gradlew :sip-app:test
+./gradlew :micronaut-vxml:test
 ```
 
-Execute only the NetAnn announcement service test suite (`:micronaut-netann`):
+Execute only the unified SIP application test suite (`:sip-app`):
 ```bash
-./gradlew :micronaut-netann:test
+./gradlew :sip-app:test
 ```
 
 Execute a specific test class:
 ```bash
 ./gradlew :micronaut-sip:test --tests net.pilgrim.sip.SipRateLimitTest
 ./gradlew :sip-app:test --tests net.pilgrim.sip.SipIntegrationTest
-./gradlew :micronaut-netann:test --tests net.pilgrim.netann.AnnouncementIntegrationTest
+./gradlew :sip-app:test --tests net.pilgrim.netann.AnnouncementIntegrationTest
+./gradlew :sip-app:test --tests net.pilgrim.mailbox.MailboxIntegrationTest
 ```
 
 View HTML test execution reports:
 ```bash
 open micronaut-sip/build/reports/tests/test/index.html
 open sip-app/build/reports/tests/test/index.html
-open micronaut-netann/build/reports/tests/test/index.html
 ```
 
 ---

@@ -225,9 +225,9 @@ public class DtmfController extends BaseSipController {
 
 ---
 
-## Example RFC 4240 NetAnn Announcement Controller (`micronaut-netann`)
+## Example RFC 4240 NetAnn Announcement Controller (`sip-app`)
 
-In [`micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java):
+In [`sip-app/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java`](../sip-app/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java):
 
 ```java
 @SipController

@@ -427,7 +427,7 @@ public class MailboxIntegrationTest {
     }
 
     @Test
-    void testNonMailboxCallReturnsNotFound() {
+    void testNonMailboxCallDoesNotTriggerMailbox() {
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
         String callId = "non-mailbox-" + UUID.randomUUID();
 
@@ -439,6 +439,8 @@ public class MailboxIntegrationTest {
 
         SipResponse response = client.send(invite, serverAddress).block(Duration.ofSeconds(3));
         assertNotNull(response);
-        assertEquals(404, response.getStatusCode(), "Calling non-mailbox URI must return 404 Not Found");
+        // In unified sip-app, calls to alice are handled by CallController (200 OK), not MailboxController
+        assertEquals(200, response.getStatusCode());
+        assertTrue(mailboxController.findSession(callId).isEmpty(), "Non-mailbox call must not create a mailbox session");
     }
 }

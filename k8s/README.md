@@ -1,6 +1,6 @@
 # Kubernetes Deployment Guide for Micronaut SIP Platform
 
-This directory contains production-ready Kubernetes manifests for deploying the **Micronaut SIP Platform**, including both the primary application (`sip-app`) and the RFC 4240 NetAnn announcement media server (`micronaut-netann`).
+This directory contains production-ready Kubernetes manifests for deploying the **Micronaut SIP Platform** application (`sip-app`), which hosts all SIP services (two-party calling, early-media, RFC 4240 NetAnn announcement media server, VoiceXML dialogs, and voicemail).
 
 ## Directory Layout
 
@@ -8,13 +8,9 @@ This directory contains production-ready Kubernetes manifests for deploying the 
 k8s/
 ├── namespace.yaml                  # Dedicated 'sip-system' namespace
 ├── kustomization.yaml              # Kustomize manifest aggregating all resources
-├── sip-app/
-│   ├── configmap.yaml              # Configuration properties for sip-app
-│   ├── deployment.yaml             # 2-replica Deployment with health/liveness probes
-│   └── service.yaml                # LoadBalancer Service exposing 5060 (UDP/TCP) & 8080 (HTTP)
-└── micronaut-netann/
-    ├── configmap.yaml              # Configuration properties for NetAnn
-    ├── deployment.yaml             # 2-replica Deployment with prompt storage volume
+└── sip-app/
+    ├── configmap.yaml              # Configuration properties for sip-app
+    ├── deployment.yaml             # 2-replica Deployment with health/liveness probes
     └── service.yaml                # LoadBalancer Service exposing 5060 (UDP/TCP) & 8080 (HTTP)
 ```
 
@@ -35,7 +31,7 @@ SIP and RTP services have specific networking characteristics in Kubernetes:
 VoIP media servers negotiate dynamic UDP ports per active call in SDP offer/answer exchanges (`m=audio <port> RTP/AVP ...` and `c=IN IP4 <ip>`). In Kubernetes, dynamic RTP media traversal requires special architectural handling:
 
 1. **Host Network Mode (`hostNetwork: true` & `dnsPolicy: ClusterFirstWithHostNet`)**:
-   - Both `sip-app` and `micronaut-netann` deployments configure `hostNetwork: true`. This binds the container directly to the host node's network interfaces, eliminating `kube-proxy` SNAT/DNAT overhead and allowing direct packet transmission across the full dynamic RTP port range (`10000–20000`).
+   - The `sip-app` deployment configures `hostNetwork: true`. This binds the container directly to the host node's network interfaces, eliminating `kube-proxy` SNAT/DNAT overhead and allowing direct packet transmission across the full dynamic RTP port range (`10000–20000`).
    - `dnsPolicy: ClusterFirstWithHostNet` preserves internal Kubernetes CoreDNS resolution while operating on the host network.
 
 2. **Advertised IP via Downward API (`SIP_SERVER_ADVERTISED_IP`)**:
@@ -71,12 +67,12 @@ VoIP media servers negotiate dynamic UDP ports per active call in SDP offer/answ
 
 #### Option A: Build with Gradle (JVM Base)
 ```bash
-./gradlew :sip-app:dockerBuild :micronaut-netann:dockerBuild
+./gradlew :sip-app:dockerBuild
 ```
 
 #### Option B: Build GraalVM Native Image Containers (Ultra-low latency, ~20ms startup, ~45MB RSS)
 ```bash
-./gradlew :sip-app:dockerBuildNative :micronaut-netann:dockerBuildNative
+./gradlew :sip-app:dockerBuildNative
 ```
 
 ### 2. Deploy with Kustomize
@@ -93,9 +89,6 @@ kubectl apply -f k8s/namespace.yaml
 
 # Deploy sip-app
 kubectl apply -f k8s/sip-app/
-
-# Deploy micronaut-netann
-kubectl apply -f k8s/micronaut-netann/
 ```
 
 ### 3. Verify Deployment
@@ -129,11 +122,6 @@ Output:
 ```
 
 Check NetAnn health:
-```bash
-kubectl port-forward svc/micronaut-netann 8081:8080 -n sip-system &
-curl -i http://localhost:8081/health
-```
-
 ---
 
 ## Test Signaling via SIPp
@@ -143,7 +131,7 @@ Run a test call against the deployed `sip-app` LoadBalancer IP:
 sipp -sn uac -s 100 <EXTERNAL-IP>:5060 -m 10 -l 1
 ```
 
-Run a test announcement against `micronaut-netann`:
+Run a test announcement against NetAnn on `sip-app`:
 ```bash
 sipp -sn uac -s annc <EXTERNAL-IP>:5060 -m 1 -l 1
 ```

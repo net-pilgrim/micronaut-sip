@@ -17,15 +17,21 @@ dependencies {
     implementation(project(":micronaut-sdp"))
     implementation(project(":micronaut-rtp"))
     implementation(project(":micronaut-sip"))
+    implementation(project(":micronaut-vxml"))
+    implementation("io.micronaut.objectstorage:micronaut-object-storage-core")
     implementation("io.projectreactor:reactor-core")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.micronaut:micronaut-management")
 
+    runtimeOnly("io.micronaut.objectstorage:micronaut-object-storage-local")
     runtimeOnly("ch.qos.logback:logback-classic")
 
     testImplementation(project(":micronaut-sdp"))
     testImplementation(project(":micronaut-rtp"))
     testImplementation(project(":micronaut-sip"))
+    testImplementation(project(":micronaut-vxml"))
+    testImplementation("io.micronaut.objectstorage:micronaut-object-storage-core")
+    testImplementation("io.micronaut.objectstorage:micronaut-object-storage-local")
     testImplementation("io.projectreactor:reactor-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -59,7 +65,8 @@ graalvmNative {
             mainClass = "net.pilgrim.Application"
             buildArgs.addAll(
                 "--no-fallback",
-                "-H:+ReportExceptionStackTraces"
+                "-H:+ReportExceptionStackTraces",
+                "-H:IncludeResources=prompts/.*|vxml/.*"
             )
         }
     }

@@ -1,5 +1,6 @@
 package net.pilgrim.vxml.loader;
 
+import io.micronaut.context.annotation.Secondary;
 import jakarta.inject.Singleton;
 import net.pilgrim.vxml.speech.ToneGenerator;
 import org.slf4j.Logger;
@@ -15,6 +16,7 @@ import java.nio.file.Paths;
  * classpath audio resources, and local audio files.
  */
 @Singleton
+@Secondary
 public class DefaultVxmlAudioLoader implements VxmlAudioLoader {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultVxmlAudioLoader.class);

@@ -144,15 +144,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Pluggable codec SPI (`RtpCodec`, `RtpCodecRegistry`) with G.711 support (`PCMU`/payload type `0`, `PCMA`/payload type `8`).
     - Standard blocking primitives (`RtpStreamSender`, `RtpStreamReceiver`) retained for lightweight/offline tooling.
 
-16. **NetAnn Basic Media Announcement Service Module (`micronaut-netann`)**:
-    - RFC 4240 compliant standalone Media Server Announcement Service (`sip:annc@...`).
-    - Parses Request-URI parameters: `play=<uri>`, `repeat=<count|forever>`, `delay=<ms>`, `duration=<ms>`, `locale`, and `content-type`.
-    - Resolves audio content from `classpath:`, `file:`, `/provisioned/`, `http(s):`, and synthetic frequencies (`tone:<freq>`), streaming 20ms G.711 PCMU/PCMA frames over RTP.
-    - Strict RFC 4240 error handling: `400 Bad Request` on missing `play=`, `404 Not Found` on non-existent audio, and `488 Not Acceptable Here` on unhandled service indicators.
-    - Automatic dialog completion: emits in-dialog `BYE` upon playback completion, or cleanly tears down background streaming upon caller `BYE`/`CANCEL`.
-    - Dialog Service endpoints (`sip:dialog@...` and `sip:vxml@...`) gated behind `netann.vxml.enabled`, powered by `:micronaut-vxml`.
-
-17. **VoiceXML 2.1 Dialog Engine Module (`micronaut-vxml`)**:
+16. **VoiceXML 2.1 Dialog Engine Module (`micronaut-vxml`)**:
     - Standalone, protocol-neutral library module implementing the W3C VoiceXML 2.1 Form Interpretation Algorithm (FIA) runtime engine.
     - XXE-hardened XML parser and strongly-typed AST covering `<vxml>`, `<form>`, `<menu>`, `<field>`, `<block>`, `<prompt>`, `<choice>`, `<goto>`, `<if>`, `<elseif>`, `<assign>`, `<var>`, `<filled>`, `<noinput>`, `<nomatch>`, `<exit>`, `<disconnect>`, `<clear>`, and `<reprompt>`.
     - ECMAScript loose expression evaluator with operator coercion and scoping (dialog scope, document scope).
@@ -160,7 +152,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Abstract speech integration layer (`TtsClient`, `AsrClient`) with fallback synthetic tone generation (`ToneGenerator`).
     - Pluggable audio loader interface (`VxmlAudioLoader`) and output sink interface (`VxmlOutputSink`) enabling seamless integration with RTP media pipelines.
 
-18. **Behavior-Driven Development (BDD/TDD) Validation Module (`micronaut-sip-bdd`)**:
+17. **Behavior-Driven Development (BDD/TDD) Validation Module (`micronaut-sip-bdd`)**:
     - Gherkin-based executable specifications running on Cucumber-JVM (`.feature` files).
     - Virtual User Agents (`VirtualUserAgent`) with dynamic UDP Netty ports, RFC 3261 state machines (`EARLY`, `CONFIRMED`, `TERMINATED`), and CSeq transaction tracking.
     - Race-free asynchronous `SipMailbox` with synchronized predicate awaiters and quiet-period assertions.
@@ -168,18 +160,18 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - SDP offer/answer inspection and audio codec negotiation assertions via `:micronaut-sdp`.
     - Automated Mermaid sequence diagram generation embedded into test execution logs and Cucumber reports.
 
-19. **Modular Consuming Application Module (`sip-app`)**:
-    - Complete standalone SIP server application demonstrating modular `@SipController` architecture:
+18. **Unified SIP Application Module (`sip-app`)**:
+    - Complete standalone SIP server application unifying all media and signaling controllers under a modular `@SipController` architecture:
       - [`CallController`](sip-app/src/main/java/net/pilgrim/controller/CallController.java): Two-party conversational setup, confirmation, teardown, cancellation, reliable PRACK, and capability discovery.
       - [`EarlyMediaController`](sip-app/src/main/java/net/pilgrim/controller/EarlyMediaController.java): RFC 3960 early-media ringback audio streaming during provisional 183 Session Progress.
+      - [`AnnouncementController`](sip-app/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java): RFC 4240 NetAnn announcement media server (`sip:annc@...`, `sip:conf@...`), Request-URI audio parameters, 20ms RTP streaming, and automatic dialog completion.
+      - [`VxmlController`](sip-app/src/main/java/net/pilgrim/netann/controller/VxmlController.java): RFC 4240 §4 Dialog Service & RFC 5552 VoiceXML media server interface (`sip:dialog@...`, `sip:vxml@...`).
+      - [`VxmlDisabledController`](sip-app/src/main/java/net/pilgrim/netann/controller/VxmlDisabledController.java): RFC 4240 §2 fallback returning 488 when VoiceXML dialogs are disabled.
+      - [`MailboxController`](sip-app/src/main/java/net/pilgrim/mailbox/controller/MailboxController.java): RFC 5552 answering machine and voicemail service (`sip:mailbox@...`, `sip:<owner>+mailbox@...`) persisting recordings into Object Storage.
       - [`SlowCallController`](sip-app/src/main/java/net/pilgrim/controller/SlowCallController.java): High-latency callee scenarios verifying non-blocking auto 100 Trying emission.
       - [`RegistrationController`](sip-app/src/main/java/net/pilgrim/controller/RegistrationController.java): RFC 3261 Section 10 SIP endpoint registrations.
       - [`DtmfController`](sip-app/src/main/java/net/pilgrim/controller/DtmfController.java): RFC 3428 instant MESSAGE and RFC 2976 / RFC 6086 INFO DTMF relay signaling.
       - [`BaseSipController`](sip-app/src/main/java/net/pilgrim/controller/BaseSipController.java): Shared base class managing transport, advertised IP, and Contact URI construction.
-
-20. **SIP Mailbox & Answering Machine Module (`sip-mailbox`)**:
-    - Complete answering machine and voicemail service (`sip:mailbox@...` and `sip:<owner>+mailbox@...`).
-    - Driven by VoiceXML dialogs, recording caller voicemail audio into object storage, and handling DTMF control.
 
 ---
 
@@ -266,21 +258,14 @@ sip.server.max-sessions=10000
 ./gradlew :sip-app:run
 ```
 
-### Run NetAnn Announcement Service
-```bash
-./gradlew :micronaut-netann:run
-```
-
 ### Build GraalVM Native Executable
 ```bash
 ./gradlew :sip-app:nativeCompile
-./gradlew :micronaut-netann:nativeCompile
 ```
 
 ### Run Native Executable
 ```bash
 ./sip-app/build/native/nativeCompile/sip-app
-./micronaut-netann/build/native/nativeCompile/micronaut-netann
 ```
 
 ### Publish Library to Maven Local

@@ -1,16 +1,16 @@
 # RFC 4240 NetAnn Announcement Service: Architecture & Call Flows
 
-`micronaut-netann` is a standalone reactive media server application built on top of `:micronaut-sip`, `:micronaut-sdp`, and `:micronaut-rtp`. It implements the **Announcement Service (`annc`)** defined by [**RFC 4240: Basic Network Media Services with SIP**](https://datatracker.ietf.org/doc/html/rfc4240).
+NetAnn is implemented as a set of reactive controllers inside `:sip-app` built on top of `:micronaut-sip`, `:micronaut-sdp`, and `:micronaut-rtp`. It implements the **Announcement Service (`annc`)** defined by [**RFC 4240: Basic Network Media Services with SIP**](https://datatracker.ietf.org/doc/html/rfc4240).
 
 ### Quick Reference
 
 - **Standard**: [RFC 4240: Basic Network Media Services with SIP](https://datatracker.ietf.org/doc/html/rfc4240)
-- **Application Module**: `:micronaut-netann`
-- **Controller**: [`AnnouncementController`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java)
-- **Audio Loader**: [`AnnouncementAudioLoader`](../micronaut-netann/src/main/java/net/pilgrim/netann/service/AnnouncementAudioLoader.java)
-- **RTP Streamer**: [`AnnouncementPlayer`](../micronaut-netann/src/main/java/net/pilgrim/netann/service/AnnouncementPlayer.java)
-- **Kubernetes Manifests**: [`k8s/micronaut-netann/`](../k8s/micronaut-netann/)
-- **Integration Test Suite**: [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java)
+- **Application Module**: `:sip-app`
+- **Controller**: [`AnnouncementController`](../sip-app/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java)
+- **Audio Loader**: [`AnnouncementAudioLoader`](../sip-app/src/main/java/net/pilgrim/netann/service/AnnouncementAudioLoader.java)
+- **RTP Streamer**: [`AnnouncementPlayer`](../sip-app/src/main/java/net/pilgrim/netann/service/AnnouncementPlayer.java)
+- **Kubernetes Manifests**: [`k8s/sip-app/`](../k8s/sip-app/)
+- **Integration Test Suite**: [`AnnouncementIntegrationTest`](../sip-app/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java)
 - **Performance Benchmark**: [1-Hour Sustained Load Benchmark (180,000 calls @ 50 cps, ~100 concurrent streams)](PERFORMANCE.md#1-hour-sustained-load--concurrency-benchmark-micronaut-netann)
 
 ### Key Call Flows Documented
@@ -472,24 +472,24 @@ sequenceDiagram
 
 ### Build Executable
 ```bash
-./gradlew :micronaut-netann:nativeCompile
+./gradlew :sip-app:nativeCompile
 ```
 
 Binary location:
 ```bash
-./micronaut-netann/build/native/nativeCompile/micronaut-netann
+./sip-app/build/native/nativeCompile/sip-app
 ```
 
 ### Build Native Container
 ```bash
-./gradlew :micronaut-netann:dockerBuildNative
+./gradlew :sip-app:dockerBuildNative
 ```
 
 ---
 
 ## 5. Kubernetes Deployment
 
-The application includes production-ready manifests in [`k8s/micronaut-netann/`](../k8s/micronaut-netann/):
+The application includes production-ready manifests in [`k8s/sip-app/`](../k8s/sip-app/):
 
 - **Deployment**: Configured with `hostNetwork: true` and `dnsPolicy: ClusterFirstWithHostNet` for direct high-throughput dynamic RTP port streaming (`10000–20000`), Downward API injection for `SIP_SERVER_ADVERTISED_IP`, liveness (`:8080/health/liveness`), readiness (`:8080/health/readiness`), startup probes, non-root security context, and resource boundaries.
 - **Service**: Exposes port `5060/UDP`, `5060/TCP`, `8080/TCP`, and representative RTP UDP media ports (`10000..10010`) with `sessionAffinity: ClientIP`.
@@ -550,15 +550,15 @@ See [Performance & Benchmarking (`PERFORMANCE.md`)](PERFORMANCE.md#1-hour-sustai
 
 ## 8. VoiceXML 2.1 Dialog Service (`dialog` / `vxml`) & Runtime Architecture
 
-In addition to RFC 4240 announcement streaming, `micronaut-netann` implements the **Dialog Service** per [RFC 4240 §4](https://datatracker.ietf.org/doc/html/rfc4240#section-4), [RFC 5552](https://datatracker.ietf.org/doc/html/rfc5552), and the [W3C VoiceXML 2.1 Specification](https://www.w3.org/TR/voicexml21/).
+In addition to RFC 4240 announcement streaming, NetAnn implements the **Dialog Service** per [RFC 4240 §4](https://datatracker.ietf.org/doc/html/rfc4240#section-4), [RFC 5552](https://datatracker.ietf.org/doc/html/rfc5552), and the [W3C VoiceXML 2.1 Specification](https://www.w3.org/TR/voicexml21/).
 
 ### Architecture & Gating
 
 - **Modular Design**: The VoiceXML 2.1 parser, AST, Form Interpretation Algorithm (FIA) runtime, expression evaluator, grammar matcher, audio loader, and speech contracts are extracted into the standalone library module [`:micronaut-vxml`](../micronaut-vxml).
-- **Decoupled Media Layer**: The interpreter is completely decoupled from transport protocols via [`VxmlMedia`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/media/VxmlMedia.java) and [`VxmlInterpreter`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/runtime/VxmlInterpreter.java). Audio streaming primitives are provided by [`RtpAudioPlayer`](../micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/media/RtpAudioPlayer.java) in `:micronaut-rtp`, and adapted via [`RtpVxmlMedia`](../micronaut-netann/src/main/java/net/pilgrim/netann/vxml/media/RtpVxmlMedia.java) and [`VxmlMediaFactory`](../micronaut-netann/src/main/java/net/pilgrim/netann/vxml/media/VxmlMediaFactory.java) to inject media into the interpreter.
-- **Isolated Controller**: [`VxmlController`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/VxmlController.java) in `:micronaut-netann` handles all VoiceXML dialog traffic (`sip:dialog@...` and `sip:vxml@...`).
-- **Feature Gating**: Controlled by configuration property `netann.vxml.enabled` (default `true`). When set to `false`, the controller bean is not registered and incoming `sip:dialog@...` requests cleanly fall through to `488 Not Acceptable Here` per RFC 4240 §2.
-- **RFC 4240 Stability**: Announcement behavior (`sip:annc@...`) in [`AnnouncementController`](../micronaut-netann/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java) remains completely untouched and isolated.
+- **Decoupled Media Layer**: The interpreter is completely decoupled from transport protocols via [`VxmlMedia`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/media/VxmlMedia.java) and [`VxmlInterpreter`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/runtime/VxmlInterpreter.java). Audio streaming primitives are provided by [`RtpAudioPlayer`](../micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/media/RtpAudioPlayer.java) in `:micronaut-rtp`, and adapted via [`RtpVxmlMedia`](../sip-app/src/main/java/net/pilgrim/netann/vxml/media/RtpVxmlMedia.java) and [`VxmlMediaFactory`](../sip-app/src/main/java/net/pilgrim/netann/vxml/media/VxmlMediaFactory.java) to inject media into the interpreter.
+- **Isolated Controller**: [`VxmlController`](../sip-app/src/main/java/net/pilgrim/netann/controller/VxmlController.java) in `:sip-app` handles all VoiceXML dialog traffic (`sip:dialog@...` and `sip:vxml@...`).
+- **Feature Gating**: Controlled by configuration property `netann.vxml.enabled` (default `true`). When set to `false`, the controller bean is not registered and incoming `sip:dialog@...` requests cleanly fall through to [`VxmlDisabledController`](../sip-app/src/main/java/net/pilgrim/netann/controller/VxmlDisabledController.java) returning `488 Not Acceptable Here` per RFC 4240 §2.
+- **RFC 4240 Stability**: Announcement behavior (`sip:annc@...`) in [`AnnouncementController`](../sip-app/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java) remains completely untouched and isolated.
 - **Abstract Speech Layer**: Abstract [`TtsClient`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/speech/TtsClient.java) and [`AsrClient`](../micronaut-vxml/src/main/java/net/pilgrim/vxml/speech/AsrClient.java) decouple the interpreter from specific speech backends, enabling MRCP / Whisper / external provider swaps.
 
 ### Supported VoiceXML 2.1 Subset

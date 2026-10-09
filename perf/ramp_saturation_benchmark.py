@@ -122,13 +122,13 @@ def main():
     env = os.environ.copy()
     env["LOG_LEVEL"] = "WARN"
     if args.target == "native":
-        bin_path = "micronaut-netann/build/native/nativeCompile/micronaut-netann"
+        bin_path = "sip-app/build/native/nativeCompile/sip-app"
         server_cmd = [bin_path]
     else:
         env["JAVA_HOME"] = "/home/dsv/.sdkman/candidates/java/25.0.2-zulu"
         env["PATH"] = f"{env['JAVA_HOME']}/bin:{env.get('PATH', '')}"
         env["JAVA_OPTS"] = "-Xms1g -Xmx4g"
-        server_cmd = ["micronaut-netann/build/install/micronaut-netann/bin/micronaut-netann"]
+        server_cmd = ["sip-app/build/install/sip-app/bin/sip-app"]
 
     print(f"Starting NetAnn server: {' '.join(server_cmd)}")
     with open(netann_log, "w") as log_out:

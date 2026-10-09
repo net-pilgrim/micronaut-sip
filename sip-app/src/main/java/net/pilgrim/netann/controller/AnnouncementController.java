@@ -1,5 +1,6 @@
 package net.pilgrim.netann.controller;
 
+import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
 import net.pilgrim.netann.config.NetannConfiguration;
@@ -7,6 +8,7 @@ import net.pilgrim.netann.model.AnnouncementParams;
 import net.pilgrim.netann.service.AnnouncementAudioLoader;
 import net.pilgrim.netann.service.AnnouncementPlayer;
 import net.pilgrim.sip.annotation.*;
+import net.pilgrim.sip.config.SipServerConfiguration;
 import net.pilgrim.sip.model.*;
 import net.pilgrim.sip.rtp.media.RtpMediaManager;
 import net.pilgrim.sip.rtp.media.RtpMediaSession;
@@ -22,6 +24,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.FileNotFoundException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Optional;
@@ -29,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /**
  * Implements RFC 4240 Basic Network Media Services with SIP: Announcement Service (annc).
@@ -55,16 +59,17 @@ public class AnnouncementController {
 
     @Inject
     public AnnouncementController(RtpMediaManager rtpMediaManager,
-                                  AnnouncementAudioLoader audioLoader,
-                                  SipNettyServer sipServer,
-                                  SipSessionManager sessionManager,
+                                  @Nullable AnnouncementAudioLoader audioLoader,
+                                  @Nullable SipNettyServer sipServer,
+                                  @Nullable SipSessionManager sessionManager,
                                   @Nullable NetannConfiguration config) {
-        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
-        this.audioLoader = audioLoader != null ? audioLoader : new AnnouncementAudioLoader();
+        this.rtpMediaManager = Optional.ofNullable(rtpMediaManager).orElseGet(RtpMediaManager::new);
+        this.audioLoader = Optional.ofNullable(audioLoader).orElseGet(AnnouncementAudioLoader::new);
         this.sipServer = sipServer;
         this.sessionManager = sessionManager;
-        this.config = config != null ? config
-                : (this.audioLoader.getConfiguration() != null ? this.audioLoader.getConfiguration() : new NetannConfiguration());
+        this.config = Optional.ofNullable(config)
+                .or(() -> Optional.ofNullable(this.audioLoader.getConfiguration()))
+                .orElseGet(NetannConfiguration::new);
     }
 
     /**
@@ -86,8 +91,10 @@ public class AnnouncementController {
             return Mono.just(overloaded);
         }
 
-        String clientIp = (request.getRemoteAddress() != null && request.getRemoteAddress().getAddress() != null)
-                ? request.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1";
+        String clientIp = Optional.ofNullable(request.getRemoteAddress())
+                .map(InetSocketAddress::getAddress)
+                .map(InetAddress::getHostAddress)
+                .orElse("127.0.0.1");
 
         AtomicInteger ipCounter = activeCallsPerIp.computeIfAbsent(clientIp, k -> new AtomicInteger(0));
         if (ipCounter.incrementAndGet() > config.getMaxAnnouncementsPerIp()) {
@@ -122,53 +129,55 @@ public class AnnouncementController {
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(pcmAudio -> {
                     // 4. Create RTP media session
-                    int localAudioPort = 49170;
-                    try {
-                        RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-                        localAudioPort = mediaSession.getLocalPort();
-                    } catch (Exception e) {
-                        LOG.warn("Failed creating RTP media session for Call-ID: {}", callId, e);
-                    }
+                    int localAudioPort = Optional.ofNullable(callId)
+                            .flatMap(id -> {
+                                try {
+                                    return Optional.of(rtpMediaManager.createSession(id).getLocalPort());
+                                } catch (Exception e) {
+                                    LOG.warn("Failed creating RTP media session for Call-ID: {}", id, e);
+                                    return Optional.empty();
+                                }
+                            })
+                            .orElse(49170);
 
                     // 5. Generate SDP Answer (or local offer if late-offer INVITE) with advertised IP
                     String advertisedIp = resolveAdvertisedIp();
-                    String sdpAnswer = (sdpOffer != null && !sdpOffer.isBlank())
-                            ? sdpNegotiator.createAnswer(sdpOffer, localAudioPort, advertisedIp)
-                            : sdpNegotiator.createOffer(localAudioPort, advertisedIp);
+                    String sdpAnswer = Optional.ofNullable(sdpOffer)
+                            .filter(Predicate.not(String::isBlank))
+                            .map(offer -> sdpNegotiator.createAnswer(offer, localAudioPort, advertisedIp))
+                            .orElseGet(() -> sdpNegotiator.createOffer(localAudioPort, advertisedIp));
 
-                    if (session != null) {
-                        session.handleInvite(request, sdpOffer);
-                        session.setState(SipSession.State.EARLY);
-                        session.setAttribute("anncParams", params);
-                        session.setAttribute("pcmAudio", pcmAudio);
-                        session.setAttribute("sdpOffer", sdpOffer);
-                        session.setAttribute("originalInvite", request);
-                    }
+                    Optional.ofNullable(session).ifPresent(s -> {
+                        s.handleInvite(request, sdpOffer);
+                        s.setState(SipSession.State.EARLY);
+                        s.setAttribute("anncParams", params);
+                        s.setAttribute("pcmAudio", pcmAudio);
+                        s.setAttribute("sdpOffer", sdpOffer);
+                        s.setAttribute("originalInvite", request);
+                    });
 
-                    int serverPort;
-                    if (sipServer != null && sipServer.getTransportRegistry() != null) {
-                        serverPort = sipServer.getTransportRegistry().resolveServerPort(request, sipServer.getConfiguration());
-                    } else {
-                        serverPort = (request.getTransport() == SipTransport.TCP)
-                                ? (sipServer != null ? sipServer.getTcpPort() : 5060)
-                                : (sipServer != null ? sipServer.getUdpPort() : 5060);
-                    }
+                    int serverPort = Optional.ofNullable(sipServer)
+                            .map(SipNettyServer::getTransportRegistry)
+                            .map(reg -> reg.resolveServerPort(request, sipServer.getConfiguration()))
+                            .orElseGet(() -> (request.getTransport() == SipTransport.TCP)
+                                    ? Optional.ofNullable(sipServer).map(SipNettyServer::getTcpPort).orElse(5060)
+                                    : Optional.ofNullable(sipServer).map(SipNettyServer::getUdpPort).orElse(5060));
 
                     SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
-                    String contactUri;
-                    if (sipServer != null && sipServer.getTransportRegistry() != null) {
-                        contactUri = sipServer.getTransportRegistry().formatContactUri(request, advertisedIp, serverPort, "annc");
-                    } else {
-                        boolean isTls = request.getTransport() == SipTransport.TLS;
-                        String scheme = isTls ? "sips" : "sip";
-                        String transportParam = request.getTransport() != null && request.getTransport() != SipTransport.UDP
-                                ? ";transport=" + request.getTransport().name().toLowerCase() : "";
-                        contactUri = "<" + scheme + ":annc@" + advertisedIp + ":" + serverPort + transportParam + ">";
-                    }
+                    String contactUri = Optional.ofNullable(sipServer)
+                            .map(SipNettyServer::getTransportRegistry)
+                            .map(reg -> reg.formatContactUri(request, advertisedIp, serverPort, "annc"))
+                            .orElseGet(() -> {
+                                boolean isTls = request.getTransport() == SipTransport.TLS;
+                                String scheme = isTls ? "sips" : "sip";
+                                String transportParam = Optional.ofNullable(request.getTransport())
+                                        .filter(t -> t != SipTransport.UDP)
+                                        .map(t -> ";transport=" + t.name().toLowerCase())
+                                        .orElse("");
+                                return "<" + scheme + ":annc@" + advertisedIp + ":" + serverPort + transportParam + ">";
+                            });
                     ok.getHeaders().setContact(contactUri);
-                    if (session != null) {
-                        session.setAttribute("originalOk", ok);
-                    }
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("originalOk", ok));
 
                     return Mono.just(ok);
                 })
@@ -192,27 +201,26 @@ public class AnnouncementController {
     }
 
     /**
-     * Fallback for unknown service indicators (RFC 4240 §2: "If the media server cannot perform
+     * Fallback for conference service indicator (RFC 4240 §2: "If the media server cannot perform
      * the requested service or does not recognize the service indicator, it MUST respond with 488 NOT ACCEPTABLE HERE").
      */
-    @OnInvite
-    public Mono<SipResponse> onUnknownServiceInvite(SipRequest request) {
+    @OnInvite("conf")
+    public Mono<SipResponse> onConfInvite(SipRequest request) {
         LOG.warn("Received INVITE for unsupported service '{}'. Returning 488 Not Acceptable Here per RFC 4240.",
                 request.getUri());
         return Mono.just(request.createResponse(488, "Not Acceptable Here"));
     }
 
+
     /**
      * Handles ACK confirming call setup: connects the RTP remote address and starts audio playback.
      */
-    @OnAck
+    @OnAck("annc")
     public void onAck(SipRequest request,
                       @SipCallId String callId,
                       SipSession session) {
         LOG.info("Received ACK for annc Call-ID: {}, starting RTP playback.", callId);
-        if (session != null) {
-            session.handleAck(request, null);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleAck(request, null));
 
         Optional<RtpMediaSession> mediaSessionOpt = rtpMediaManager.findSession(callId);
         if (mediaSessionOpt.isEmpty()) {
@@ -222,27 +230,32 @@ public class AnnouncementController {
         RtpMediaSession mediaSession = mediaSessionOpt.get();
 
         // Configure remote RTP address from SDP offer
-        String remoteSdp = (session != null) ? session.getAttribute("sdpOffer") : null;
-        if (remoteSdp != null && !remoteSdp.isBlank()) {
-            try {
-                SdpMessage parsed = sdpParser.parse(remoteSdp);
-                SdpMessage.MediaDescription audio = parsed.findFirstAudioMedia();
-                if (audio != null && audio.getPort() > 0) {
-                    String host = parseConnectionHost(parsed.getConnection())
-                            .orElse((request.getRemoteAddress() != null && request.getRemoteAddress().getAddress() != null)
-                                    ? request.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1");
-                    mediaSession.setRemoteAddress(new InetSocketAddress(host, audio.getPort()));
-                    LOG.info("Configured remote RTP destination {}:{} for Call-ID: {}", host, audio.getPort(), callId);
-                }
-            } catch (Exception e) {
-                LOG.warn("Failed parsing SDP offer for Call-ID: {}", callId, e);
-            }
-        }
+        Optional.ofNullable(session)
+                .map(s -> (String) s.getAttribute("sdpOffer"))
+                .filter(Predicate.not(String::isBlank))
+                .ifPresent(remoteSdp -> {
+                    try {
+                        SdpMessage parsed = sdpParser.parse(remoteSdp);
+                        Optional.ofNullable(parsed.findFirstAudioMedia())
+                                .filter(audio -> audio.getPort() > 0)
+                                .ifPresent(audio -> {
+                                    String host = parseConnectionHost(parsed.getConnection())
+                                            .or(() -> Optional.ofNullable(request.getRemoteAddress())
+                                                    .map(InetSocketAddress::getAddress)
+                                                    .map(InetAddress::getHostAddress))
+                                            .orElse("127.0.0.1");
+                                    mediaSession.setRemoteAddress(new InetSocketAddress(host, audio.getPort()));
+                                    LOG.info("Configured remote RTP destination {}:{} for Call-ID: {}", host, audio.getPort(), callId);
+                                });
+                    } catch (Exception e) {
+                        LOG.warn("Failed parsing SDP offer for Call-ID: {}", callId, e);
+                    }
+                });
 
-        byte[] pcmAudio = (session != null) ? session.getAttribute("pcmAudio") : null;
-        AnnouncementParams params = (session != null) ? session.getAttribute("anncParams") : null;
-        SipRequest originalInvite = (session != null) ? session.getAttribute("originalInvite") : null;
-        SipResponse originalOk = (session != null) ? session.getAttribute("originalOk") : null;
+        byte[] pcmAudio = Optional.ofNullable(session).map(s -> (byte[]) s.getAttribute("pcmAudio")).orElse(null);
+        AnnouncementParams params = Optional.ofNullable(session).map(s -> (AnnouncementParams) s.getAttribute("anncParams")).orElse(null);
+        SipRequest originalInvite = Optional.ofNullable(session).map(s -> (SipRequest) s.getAttribute("originalInvite")).orElse(null);
+        SipResponse originalOk = Optional.ofNullable(session).map(s -> (SipResponse) s.getAttribute("originalOk")).orElse(null);
 
         if (pcmAudio == null || pcmAudio.length == 0) {
             LOG.info("No audio data to play for Call-ID: {}, terminating call with BYE.", callId);
@@ -270,14 +283,12 @@ public class AnnouncementController {
     /**
      * Handles BYE from client terminating the call early.
      */
-    @OnBye
+    @OnBye("annc")
     public Mono<SipResponse> onBye(SipRequest request,
                                    @SipCallId String callId,
                                    SipSession session) {
         LOG.info("Received BYE for Call-ID: {}, stopping playback and terminating session.", callId);
-        if (session != null) {
-            session.handleBye(request);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleBye(request));
         cleanupCall(callId, session);
         return Mono.just(SipResponse.ok(request));
     }
@@ -285,21 +296,19 @@ public class AnnouncementController {
     /**
      * Handles CANCEL request from client terminating call setup.
      */
-    @OnCancel
+    @OnCancel("annc")
     public void onCancel(SipRequest request,
                          @SipCallId String callId,
                          SipSession session) {
         LOG.info("Received CANCEL for Call-ID: {}, cancelling playback.", callId);
-        if (session != null) {
-            session.handleCancel(request);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleCancel(request));
         cleanupCall(callId, session);
     }
 
     /**
      * Handles OPTIONS request for capability querying.
      */
-    @OnOptions
+    @OnOptions("annc")
     public SipResponse onOptions(SipRequest request) {
         SipResponse response = SipResponse.ok(request);
         response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS");
@@ -308,24 +317,20 @@ public class AnnouncementController {
     }
 
     private void releaseClientIp(String callId) {
-        String clientIp = callIdToClientIp.remove(callId);
-        if (clientIp != null) {
+        Optional.ofNullable(callIdToClientIp.remove(callId)).ifPresent(clientIp -> {
             AtomicInteger counter = activeCallsPerIp.get(clientIp);
             if (counter != null && counter.decrementAndGet() <= 0) {
                 activeCallsPerIp.remove(clientIp, counter);
             }
-        }
+        });
     }
 
     private void cleanupCall(String callId, SipSession session) {
         releaseClientIp(callId);
-        AnnouncementPlayer player = activePlayers.remove(callId);
-        if (player != null) {
-            player.stop();
-        }
-        if (session != null && !session.isTerminated()) {
-            session.setState(SipSession.State.TERMINATED);
-        }
+        Optional.ofNullable(activePlayers.remove(callId)).ifPresent(AnnouncementPlayer::stop);
+        Optional.ofNullable(session)
+                .filter(Predicate.not(SipSession::isTerminated))
+                .ifPresent(s -> s.setState(SipSession.State.TERMINATED));
         rtpMediaManager.terminateSession(callId);
     }
 
@@ -341,15 +346,11 @@ public class AnnouncementController {
         }
 
         try {
-            String targetUri = originalInvite.getContact();
-            if (targetUri == null || targetUri.isEmpty()) {
-                targetUri = originalInvite.getFrom();
-            }
-            if (targetUri != null) {
-                targetUri = targetUri.replaceAll("^<|>$", "").split(";")[0];
-            } else {
-                targetUri = originalInvite.getUri().toString();
-            }
+            String targetUri = Optional.ofNullable(originalInvite.getContact())
+                    .filter(Predicate.not(String::isEmpty))
+                    .or(() -> Optional.ofNullable(originalInvite.getFrom()))
+                    .map(uri -> uri.replaceAll("^<|>$", "").split(";")[0])
+                    .orElseGet(() -> originalInvite.getUri().toString());
 
             SipRequest bye = new SipRequest(SipMethod.BYE, SipUri.parse(targetUri));
             bye.setRemoteAddress(originalInvite.getRemoteAddress());
@@ -364,13 +365,11 @@ public class AnnouncementController {
             bye.getHeaders().setContentLength(0);
 
             String host = resolveAdvertisedIp();
-            int port;
-            if (sipServer.getTransportRegistry() != null) {
-                port = sipServer.getTransportRegistry().resolveServerPort(originalInvite, sipServer.getConfiguration());
-            } else {
-                port = (originalInvite.getTransport() == SipTransport.TCP) ? sipServer.getTcpPort() : sipServer.getUdpPort();
-            }
-            String proto = originalInvite.getTransport() != null ? originalInvite.getTransport().name() : "UDP";
+            int port = Optional.ofNullable(sipServer.getTransportRegistry())
+                    .map(reg -> reg.resolveServerPort(originalInvite, sipServer.getConfiguration()))
+                    .orElseGet(() -> (originalInvite.getTransport() == SipTransport.TCP) ? sipServer.getTcpPort() : sipServer.getUdpPort());
+
+            String proto = Optional.ofNullable(originalInvite.getTransport()).map(Enum::name).orElse("UDP");
             String branch = "z9hG4bK-bye-" + UUID.randomUUID().toString().substring(0, 8);
             bye.getHeaders().set(SipHeaders.VIA, "SIP/2.0/" + proto + " " + host + ":" + port + ";branch=" + branch + ";rport");
 
@@ -382,21 +381,19 @@ public class AnnouncementController {
     }
 
     private String resolveAdvertisedIp() {
-        if (sipServer != null && sipServer.getConfiguration() != null) {
-            return sipServer.getConfiguration().resolveAdvertisedIp();
-        }
-        return "127.0.0.1";
+        return Optional.ofNullable(sipServer)
+                .map(SipNettyServer::getConfiguration)
+                .map(SipServerConfiguration::resolveAdvertisedIp)
+                .orElse("127.0.0.1");
     }
 
     private Optional<String> parseConnectionHost(String connectionLine) {
-        if (connectionLine == null || connectionLine.isBlank()) {
-            return Optional.empty();
-        }
-        String[] parts = connectionLine.trim().split("\\s+");
-        if (parts.length < 3 || parts[2].isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.of(parts[2].trim());
+        return Optional.ofNullable(connectionLine)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .map(line -> line.split("\\s+"))
+                .filter(parts -> parts.length >= 3 && !parts[2].isBlank())
+                .map(parts -> parts[2].trim());
     }
 
     public Map<String, AnnouncementPlayer> getActivePlayers() {
@@ -404,7 +401,6 @@ public class AnnouncementController {
     }
 
     public int getActiveCountForIp(String ip) {
-        AtomicInteger count = activeCallsPerIp.get(ip);
-        return count != null ? count.get() : 0;
+        return Optional.ofNullable(activeCallsPerIp.get(ip)).map(AtomicInteger::get).orElse(0);
     }
 }

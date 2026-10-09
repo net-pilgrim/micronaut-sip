@@ -80,7 +80,7 @@ xychart-beta
 
 ### 1-Hour Sustained Load & Concurrency Benchmark (`micronaut-netann`)
 
-A comprehensive **1-hour continuous stress and stability benchmark** was conducted on the RFC 4240 announcement media server application ([`micronaut-netann`](../micronaut-netann/)) to evaluate real-time bidirectional media handling, session concurrency, memory stability, and RTP socket lifecycle management under heavy, continuous call arrival.
+A comprehensive **1-hour continuous stress and stability benchmark** was conducted on the RFC 4240 announcement media server application ([`sip-app`](../sip-app/)) to evaluate real-time bidirectional media handling, session concurrency, memory stability, and RTP socket lifecycle management under heavy, continuous call arrival.
 
 #### Workload Profile
 - **Target Application**: `micronaut-netann` on `127.0.0.1:5060` (UDP/TCP SIP) and dynamic UDP ports `10000..20000` (RTP media)
@@ -181,7 +181,7 @@ sipp 127.0.0.1:5060 -sn uac -p 5080 -m 15000 -r 50 -d 0 -trace_screen -trace_sta
 #### RFC 4240 NetAnn 1-Hour Performance Benchmark (`micronaut-netann`)
 ```bash
 # 1. Build application distribution
-./gradlew :micronaut-netann:installDist
+./gradlew :sip-app:installDist
 
 # 2. Run automated 1-hour performance test suite with telemetry monitor:
 bash perf/run_1h_perf.sh

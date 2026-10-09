@@ -16,19 +16,19 @@ rm -f perf/perf_metrics.csv perf/sipp_stats.csv perf/sipp_errors.log perf/sipp_s
 export LOG_LEVEL=WARN
 
 if [ "$TARGET" = "native" ]; then
-    echo "=== Starting NetAnn Server (GraalVM Native Image) ==="
-    if [ ! -f "micronaut-netann/build/native/nativeCompile/micronaut-netann" ]; then
-        echo "Error: Native executable micronaut-netann/build/native/nativeCompile/micronaut-netann not found!"
+    echo "=== Starting SIP Server (GraalVM Native Image) ==="
+    if [ ! -f "sip-app/build/native/nativeCompile/sip-app" ]; then
+        echo "Error: Native executable sip-app/build/native/nativeCompile/sip-app not found!"
         exit 1
     fi
-    ./micronaut-netann/build/native/nativeCompile/micronaut-netann > perf/netann.log 2>&1 &
+    ./sip-app/build/native/nativeCompile/sip-app > perf/netann.log 2>&1 &
     SERVER_PID=$!
 elif [ "$TARGET" = "jvm" ]; then
-    echo "=== Starting NetAnn Server (JVM Zulu 25) ==="
+    echo "=== Starting SIP Server (JVM Zulu 25) ==="
     export JAVA_HOME=/home/dsv/.sdkman/candidates/java/25.0.2-zulu
     export PATH=$JAVA_HOME/bin:$PATH
     export JAVA_OPTS="-Xms1g -Xmx4g"
-    micronaut-netann/build/install/micronaut-netann/bin/micronaut-netann > perf/netann.log 2>&1 &
+    sip-app/build/install/sip-app/bin/sip-app > perf/netann.log 2>&1 &
     SERVER_PID=$!
 else
     echo "Unknown target: $TARGET. Use 'native' or 'jvm'."
