@@ -2,21 +2,17 @@ package net.pilgrim.controller;
 
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
+import net.pilgrim.sip.annotation.*;
 import net.pilgrim.sip.config.SipServerConfiguration;
-import net.pilgrim.sip.model.SipTransport;
+import net.pilgrim.sip.model.SipHeaders;
+import net.pilgrim.sip.model.SipRequest;
+import net.pilgrim.sip.model.SipResponse;
 import net.pilgrim.sip.rtp.RtpPacketizer;
 import net.pilgrim.sip.rtp.RtpStreamSender;
-import net.pilgrim.sip.rtp.codec.G711UlawCodec;
 import net.pilgrim.sip.rtp.codec.RtpCodec;
 import net.pilgrim.sip.rtp.codec.RtpCodecRegistry;
 import net.pilgrim.sip.rtp.media.RtpMediaManager;
 import net.pilgrim.sip.rtp.media.RtpMediaSession;
-import net.pilgrim.sip.annotation.*;
-import net.pilgrim.sip.dtmf.DtmfSignal;
-import net.pilgrim.sip.model.SipHeaders;
-import net.pilgrim.sip.model.SipRequest;
-import net.pilgrim.sip.model.SipResponse;
-import net.pilgrim.sip.model.SipUri;
 import net.pilgrim.sip.sdp.SdpMessage;
 import net.pilgrim.sip.sdp.SdpNegotiator;
 import net.pilgrim.sip.sdp.SdpParser;
@@ -28,21 +24,21 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
 
 /**
- * Example reactive SIP Controller handling phone call setup (INVITE),
- * confirmation (ACK), termination (BYE), registration (REGISTER),
- * capabilities (OPTIONS), and instant messaging (MESSAGE).
+ * Primary reactive SIP Controller handling standard two-party call setup (INVITE),
+ * confirmation (ACK), termination (BYE), setup cancellation (CANCEL),
+ * options query (OPTIONS), and reliable provisional acknowledgement (PRACK).
  */
 @SipController
-public class CallController {
+public class CallController extends BaseSipController {
 
     private static final Logger LOG = LoggerFactory.getLogger(CallController.class);
     private static final SdpNegotiator SDP_NEGOTIATOR = new SdpNegotiator();
@@ -50,8 +46,6 @@ public class CallController {
     private static final RtpCodecRegistry RTP_CODECS = RtpCodecRegistry.withG711Defaults();
 
     private final RtpMediaManager rtpMediaManager;
-    private final SipNettyServer sipServer;
-    private final SipServerConfiguration serverConfig;
 
     public CallController() {
         this(new RtpMediaManager(), null, null);
@@ -65,44 +59,8 @@ public class CallController {
     public CallController(RtpMediaManager rtpMediaManager,
                           @Nullable SipNettyServer sipServer,
                           @Nullable SipServerConfiguration serverConfig) {
+        super(sipServer, serverConfig);
         this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
-        this.sipServer = sipServer;
-        this.serverConfig = serverConfig != null ? serverConfig
-                : (sipServer != null ? sipServer.getConfiguration() : new SipServerConfiguration());
-    }
-
-    public String resolveAdvertisedIp() {
-        if (serverConfig != null) {
-            return serverConfig.resolveAdvertisedIp();
-        }
-        if (sipServer != null) {
-            return sipServer.getAdvertisedIp();
-        }
-        return "127.0.0.1";
-    }
-
-    public int resolveServerPort(SipRequest request) {
-        if (sipServer != null && sipServer.getTransportRegistry() != null) {
-            return sipServer.getTransportRegistry().resolveServerPort(request, serverConfig);
-        }
-        boolean isTcp = request != null && request.getTransport() == SipTransport.TCP;
-        if (isTcp) {
-            return sipServer != null ? sipServer.getTcpPort()
-                    : (serverConfig != null ? serverConfig.getTcpPort() : 5060);
-        } else {
-            return sipServer != null ? sipServer.getUdpPort()
-                    : (serverConfig != null ? serverConfig.getUdpPort() : 5060);
-        }
-    }
-
-    public String buildContactUri(SipRequest request) {
-        String advertisedIp = resolveAdvertisedIp();
-        int serverPort = resolveServerPort(request);
-        if (sipServer != null && sipServer.getTransportRegistry() != null) {
-            return sipServer.getTransportRegistry().formatContactUri(request, advertisedIp, serverPort);
-        }
-        boolean isTcp = request != null && request.getTransport() == SipTransport.TCP;
-        return "<sip:" + advertisedIp + ":" + serverPort + (isTcp ? ";transport=tcp" : "") + ">";
     }
 
     public RtpMediaManager getRtpMediaManager() {
@@ -210,193 +168,6 @@ public class CallController {
     }
 
     /**
-     * Handles INVITE to "slow" user without an immediate provisional response,
-     * delaying 350ms to trigger the server's auto 100 Trying timer (at 200ms)
-     * before emitting 200 OK.
-     */
-    @OnInvite("slow")
-    public Mono<SipResponse> onSlowInvite(SipRequest request,
-                                          @SipCallId String callId,
-                                          @SipBody String sdpOffer,
-                                          SipSession session) {
-        LOG.info("Received slow INVITE for Call-ID: {}, delaying 350ms to trigger auto 100 Trying", callId);
-        if (session != null) {
-            session.handleInvite(request, sdpOffer);
-            session.setState(SipSession.State.EARLY);
-        }
-
-        int localAudioPort = 49170;
-        try {
-            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception e) {
-            LOG.warn("Failed to allocate dynamic Netty RTP port for slow Call-ID: {}", callId, e);
-        }
-
-        String advertisedIp = resolveAdvertisedIp();
-        String contactUri = buildContactUri(request);
-
-        SipResponse ok;
-        if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
-            if (session != null) {
-                session.setAttribute("sdpAnswer", answer);
-            }
-            ok = SipResponse.ok(request, answer, "application/sdp");
-        } else {
-            if (session != null) {
-                session.setAttribute("awaitingAckSdpAnswer", true);
-            }
-            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
-            if (session != null) {
-                session.setAttribute("localSdpOffer", localOffer);
-            }
-            ok = SipResponse.ok(request, localOffer, "application/sdp");
-        }
-        ok.getHeaders().setContact(contactUri);
-        return Mono.just(ok).delayElement(Duration.ofMillis(350));
-    }
-
-    /**
-     * Handles INVITE to "early-media" or "ringback" endpoint (RFC 3960 / RFC 3261).
-     * Emits a provisional 183 Session Progress response containing the SDP answer,
-     * immediately starts streaming in-band early media (ringback tone) over RTP while
-     * in the EARLY dialog state, and subsequently emits 200 OK after the early media duration.
-     */
-    @OnInvite("early-media")
-    public Flux<SipResponse> onEarlyMediaInvite(SipRequest request,
-                                                @SipCallId String callId,
-                                                @SipBody String sdpOffer,
-                                                SipSession session) {
-        LOG.info("Received early-media INVITE for Call-ID: {} from: {}", callId, request.getFrom());
-        if (session != null) {
-            session.handleInvite(request, sdpOffer);
-        }
-
-        int localAudioPort = 49170;
-        RtpMediaSession mediaSession = null;
-        try {
-            mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception e) {
-            LOG.warn("Failed to allocate dynamic Netty RTP port for early-media Call-ID: {}", callId, e);
-        }
-
-        String advertisedIp = resolveAdvertisedIp();
-        String contactUri = buildContactUri(request);
-
-        String sdpAnswer = (sdpOffer != null && !sdpOffer.isBlank())
-                ? SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp)
-                : SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
-
-        if (session != null) {
-            session.setAttribute("sdpAnswer", sdpAnswer);
-        }
-
-        // 183 Session Progress provisional response carrying SDP Answer
-        SipResponse sessionProgress = SipResponse.sessionProgress(request);
-        sessionProgress.getHeaders().setContentType("application/sdp");
-        sessionProgress.setBody(sdpAnswer);
-        sessionProgress.getHeaders().setContact(contactUri);
-
-        boolean require100rel = request.getHeaders().containsToken(SipHeaders.REQUIRE, "100rel");
-        boolean supported100rel = request.getHeaders().containsToken(SipHeaders.SUPPORTED, "100rel");
-        boolean reliable100rel = require100rel || supported100rel;
-
-        Sinks.One<Void> prackSink = null;
-        if (reliable100rel) {
-            sessionProgress.getHeaders().set(SipHeaders.REQUIRE, "100rel");
-            sessionProgress.getHeaders().setRSeq(1);
-            if (session != null) {
-                prackSink = Sinks.one();
-                session.getReliableContext().initiate(1L, request.getCSeqNumber(),
-                        request.getMethod() != null ? request.getMethod().name() : "INVITE", prackSink);
-                session.setAttribute("rseq", 1L);
-                session.setAttribute("cseqNumber", request.getCSeqNumber());
-                session.setAttribute("cseqMethod", request.getMethod() != null ? request.getMethod().name() : "INVITE");
-                session.setAttribute("prackSink", prackSink);
-            }
-        }
-
-        if (session != null) {
-            session.handleProvisional(sessionProgress);
-        }
-
-        // Configure early media duration (default: 800ms)
-        long earlyMediaMs = 800;
-        String customDuration = request.getHeaders().get("X-Early-Media-Duration");
-        if (customDuration != null) {
-            try {
-                earlyMediaMs = Long.parseLong(customDuration);
-            } catch (NumberFormatException ignored) {}
-        }
-
-        // Stream in-band ringback tone early media over RTP
-        if (mediaSession != null && sdpOffer != null && !sdpOffer.isBlank()) {
-            try {
-                SdpMessage parsed = SDP_PARSER.parse(sdpOffer);
-                SdpMessage.MediaDescription audio = parsed.findFirstAudioMedia();
-                if (audio != null && audio.getPort() > 0) {
-                    String host = parseConnectionHost(parsed.getConnection()).orElse("127.0.0.1");
-                    mediaSession.setRemoteAddress(new InetSocketAddress(InetAddress.getByName(host), audio.getPort()));
-                    mediaSession.setCodec(new G711UlawCodec());
-                    byte[] ringbackPcm = generateRingbackTone((int) earlyMediaMs);
-                    mediaSession.playAudio(ringbackPcm, null);
-                    LOG.info("Started early media ringback audio streaming for Call-ID: {} to {}:{} ({} ms)",
-                            callId, host, audio.getPort(), earlyMediaMs);
-                }
-            } catch (Exception e) {
-                LOG.warn("Failed to initiate early media RTP streaming for Call-ID: {}", callId, e);
-            }
-        }
-
-        // 200 OK final response (call answered)
-        SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
-        ok.getHeaders().setContact(contactUri);
-        if (sessionProgress.getTo() != null) {
-            ok.getHeaders().setTo(sessionProgress.getTo());
-        }
-
-        Mono<SipResponse> delayedOk = Mono.just(ok).delayElement(Duration.ofMillis(earlyMediaMs));
-        if (prackSink != null) {
-            delayedOk = Mono.when(
-                    prackSink.asMono().timeout(Duration.ofSeconds(5), Mono.empty()),
-                    Mono.delay(Duration.ofMillis(earlyMediaMs))
-            ).thenReturn(ok);
-        }
-
-        return Flux.concat(
-                Mono.just(sessionProgress),
-                delayedOk
-        );
-    }
-
-    @OnInvite("ringback")
-    public Flux<SipResponse> onRingbackInvite(SipRequest request,
-                                              @SipCallId String callId,
-                                              @SipBody String sdpOffer,
-                                              SipSession session) {
-        return onEarlyMediaInvite(request, callId, sdpOffer, session);
-    }
-
-    /**
-     * Generates a North American standard dual-frequency (440 Hz + 480 Hz) ringback tone
-     * in linear PCM-16LE format (8000 Hz, mono).
-     */
-    public static byte[] generateRingbackTone(int durationMs) {
-        int totalSamples = (int) (8000.0 * durationMs / 1000.0);
-        byte[] pcm = new byte[totalSamples * 2];
-        for (int i = 0; i < totalSamples; i++) {
-            double t = i / 8000.0;
-            double sample = 0.5 * Math.sin(2 * Math.PI * 440.0 * t) + 0.5 * Math.sin(2 * Math.PI * 480.0 * t);
-            short s = (short) (sample * 16384);
-            pcm[2 * i] = (byte) (s & 0xFF);
-            pcm[2 * i + 1] = (byte) ((s >> 8) & 0xFF);
-        }
-        return pcm;
-    }
-
-    /**
      * Handles ACK confirming call setup.
      * Does not return a response per RFC 3261 Section 17.2.1.
      */
@@ -451,28 +222,6 @@ public class CallController {
     }
 
     /**
-     * Handles REGISTER requests from SIP endpoints.
-     */
-    @OnRegister
-    public SipResponse onRegister(SipRequest request,
-                                  @SipTo SipUri toUri,
-                                  @SipParam(value = "transport", defaultValue = "udp") String transport,
-                                  @SipHeader(value = "Contact", required = false) String contact) {
-        String user = (toUri != null && toUri.getUser() != null) ? toUri.getUser() : "";
-        LOG.info("Received REGISTER request for user: {} transport: {} Contact: {}", user, transport, contact);
-        SipResponse response = SipResponse.ok(request);
-        if (contact != null) {
-            response.getHeaders().setContact(contact);
-        }
-        if (!user.isEmpty()) {
-            response.getHeaders().set("X-Registered-User", user);
-        }
-        response.getHeaders().set("X-Transport-Param", transport);
-        response.getHeaders().set(SipHeaders.EXPIRES, "3600");
-        return response;
-    }
-
-    /**
      * Handles PRACK (Provisional Response Acknowledgement) per RFC 3262.
      * Validates the RAck header against the session, completes any pending PRACK sink,
      * and returns 200 OK to acknowledge the PRACK request.
@@ -480,12 +229,12 @@ public class CallController {
     @OnPrack
     public Mono<SipResponse> onPrack(SipRequest request,
                                      @SipCallId String callId,
-                                     @SipHeader(value = SipHeaders.RACK, required = false) String rack,
-                                     @SipBody(required = false) String prackBody,
+                                     @SipHeader(value = "RAck", required = false) String rack,
+                                     @SipBody String prackBody,
                                      SipSession session) {
-        LOG.info("Received PRACK for Call-ID: {} with RAck: {}", callId, rack);
-        if (session == null || session.isTerminated()) {
-            LOG.warn("Received PRACK for non-existent or terminated session Call-ID: {}", callId);
+        LOG.info("Received PRACK for Call-ID: {} RAck: {}", callId, rack);
+        if (session == null) {
+            LOG.warn("PRACK received for unknown Call-ID: {}", callId);
             return Mono.just(SipResponse.transactionDoesNotExist(request));
         }
 
@@ -509,58 +258,6 @@ public class CallController {
         response.getHeaders().set(SipHeaders.SUPPORTED, "replaces, 100rel");
         response.getHeaders().set(SipHeaders.RECV_INFO, "dtmf");
         return response;
-    }
-
-    /**
-     * Handles MESSAGE instant messaging (RFC 3428), including DTMF transmission.
-     */
-    @OnMessage
-    public Mono<SipResponse> onMessage(SipRequest request,
-                                       @SipFrom String from,
-                                       @SipBody String messageBody,
-                                       @SipDtmf DtmfSignal dtmf,
-                                       SipSession session) {
-        if (dtmf != null) {
-            LOG.info("Received DTMF via MESSAGE from {}: digit='{}', duration={}ms", from, dtmf.getDigit(), dtmf.getDuration());
-            if (session != null) {
-                recordDtmfInSession(session, dtmf);
-            }
-            SipResponse ok = SipResponse.ok(request);
-            ok.getHeaders().set("X-Received-DTMF", String.valueOf(dtmf.getDigit()));
-            return Mono.just(ok);
-        }
-        LOG.info("Received MESSAGE from {}: '{}'", from, messageBody);
-        return Mono.just(SipResponse.ok(request));
-    }
-
-    /**
-     * Handles mid-dialog SIP INFO requests (RFC 2976 / RFC 6086), including DTMF relay signaling.
-     */
-    @OnInfo
-    public Mono<SipResponse> onInfo(SipRequest request,
-                                    @SipCallId String callId,
-                                    @SipFrom String from,
-                                    @SipDtmf DtmfSignal dtmf,
-                                    SipSession session) {
-        if (dtmf != null) {
-            LOG.info("Received DTMF via INFO for Call-ID: {} from: {}: digit='{}', duration={}ms, volume={}",
-                    callId, from, dtmf.getDigit(), dtmf.getDuration(), dtmf.getVolume());
-            if (session != null) {
-                recordDtmfInSession(session, dtmf);
-            }
-            SipResponse ok = SipResponse.ok(request);
-            ok.getHeaders().set("X-Received-DTMF", String.valueOf(dtmf.getDigit()));
-            return Mono.just(ok);
-        }
-        LOG.info("Received INFO for Call-ID: {} from: {} with body: '{}'", callId, from, request.getBodyAsString());
-        return Mono.just(SipResponse.ok(request));
-    }
-
-    private void recordDtmfInSession(SipSession session, DtmfSignal dtmf) {
-        String existing = session.getAttribute("dtmfDigits");
-        String updated = (existing != null ? existing : "") + dtmf.getDigit();
-        session.setAttribute("dtmfDigits", updated);
-        session.setAttribute("lastDtmf", dtmf);
     }
 
     private void maybeSendRtpProbe(String callId, SipSession session) {
