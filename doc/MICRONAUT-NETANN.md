@@ -30,43 +30,33 @@
 ## 1. Architectural Overview
 
 ```mermaid
-flowchart TD
-    SIPClient["SIP Client / Media Gateway / SBC"]
+sequenceDiagram
+    autonumber
+    participant Client as SIP Client / SBC
+    participant Netty as Netty Transport (:micronaut-sip)
+    participant Controller as AnnouncementController
+    participant Media as Audio & SDP Engine
+    participant Player as AnnouncementPlayer (:micronaut-rtp)
+
+    Client->>Netty: INVITE sip:annc@...#59;play=... (SDP Offer)
+    Netty->>Controller: Route INVITE (@OnInvite)
+    Controller->>Media: Load audio & negotiate SDP (RFC 3264)
+    Media-->>Controller: Return SDP Answer & media port
+    Controller->>Netty: 200 OK (SDP Answer)
+    Netty-->>Client: 200 OK (SDP Answer)
+    Client->>Netty: ACK
+    Netty->>Controller: Route ACK (Dialog CONFIRMED)
+    Controller->>Player: Start 20ms RTP playback
     
-    subgraph NetAnn["micronaut-netann Media Server Application"]
-        subgraph Signaling["SIP Signaling Engine (:micronaut-sip)"]
-            NettyTransport["Netty NIO (UDP & TCP :5060)"]
-            Dispatcher["SipDispatcher Router"]
-            Controller["AnnouncementController (@OnInvite('annc'))"]
-            SessionMgr["SipSessionManager"]
-        end
-        
-        subgraph MediaEngine["Audio & RTP Media Engine (:micronaut-rtp / :micronaut-sdp)"]
-            Loader["AnnouncementAudioLoader<br/>(WAV to PCM-16LE, tone generator, HTTP, file, classpath)"]
-            Negotiator["SdpNegotiator (RFC 3264)"]
-            Player["AnnouncementPlayer (20ms RTP Frame Scheduler)"]
-            PortMgr["MediaPortManager (RFC 3550 even UDP ports)"]
-            RtpNetty["Netty Datagram RTP Sender (G.711 PCMU/PCMA)"]
-        end
+    loop Every 20ms until audio finishes
+        Player-->>Client: RTP Datagram (G.711 PCMU/PCMA)
     end
     
-    SIPClient -->|"1. INVITE sip:annc@...;play=..."| NettyTransport
-    NettyTransport --> Dispatcher
-    Dispatcher --> Controller
-    Controller --> Loader
-    Controller --> Negotiator
-    Negotiator --> PortMgr
-    Controller -->|"2. 200 OK (SDP Answer)"| NettyTransport
-    NettyTransport -->|"200 OK"| SIPClient
-    SIPClient -->|"3. ACK"| NettyTransport
-    NettyTransport --> Controller
-    Controller --> Player
-    Player --> RtpNetty
-    RtpNetty -->|"4. 20ms G.711 RTP Audio Stream"| SIPClient
-    Player -->|"5. Playback Finished Callback"| Controller
-    Controller -->|"6. In-Dialog BYE"| NettyTransport
-    NettyTransport -->|"BYE"| SIPClient
-    SIPClient -->|"7. 200 OK (BYE)"| NettyTransport
+    Player->>Controller: Playback finished callback
+    Controller->>Netty: Emit in-dialog BYE
+    Netty-->>Client: BYE
+    Client->>Netty: 200 OK (BYE)
+    Netty->>Controller: Teardown session & release media ports
 ```
 
 ---
@@ -123,9 +113,9 @@ In accordance with RFC 4240 §2, once the requested audio prompt finishes playin
 sequenceDiagram
     autonumber
     participant Client as SIP Caller / Gateway
-    participant Server as "NetAnn Server (micronaut-netann)"
+    participant Server as NetAnn Server (micronaut-netann)
     
-    Client->>Server: "INVITE sip:annc@ms.example.net;play=tone:440 SIP/2.0 (with SDP Offer)"
+    Client->>Server: INVITE sip:annc@ms.example.net#59;play=tone:440 SIP/2.0 (with SDP Offer)
     Server-->>Client: 100 Trying (optional)
     Server->>Server: Parse play=tone:440, synthesize 8kHz PCM audio, allocate RTP port (e.g. 10002)
     Server-->>Client: 200 OK (with SDP Answer, To-tag, Contact)
@@ -136,8 +126,8 @@ sequenceDiagram
         Server->>Client: RTP Packet (PT=0 PCMU, Seq=1..N, TS=0, 160, 320...)
     end
     
-    Server->>Server: "Audio finished playing; trigger completion callback"
-    Server->>Client: "BYE sip:caller@127.0.0.1:5060;tag=clientTag SIP/2.0"
+    Server->>Server: Audio finished playing, trigger completion callback
+    Server->>Client: BYE sip:caller@127.0.0.1:5060#59;tag=clientTag SIP/2.0
     Client-->>Server: 200 OK
     Server->>Server: Release RTP port pair, terminate dialog session
 ```
@@ -241,9 +231,9 @@ When a caller hangs up prior to announcement completion, the server immediately 
 sequenceDiagram
     autonumber
     participant Client as SIP Caller / Gateway
-    participant Server as "NetAnn Server (micronaut-netann)"
+    participant Server as NetAnn Server (micronaut-netann)
     
-    Client->>Server: "INVITE sip:annc@...;play=classpath:prompts/welcome.wav"
+    Client->>Server: INVITE sip:annc@...#59;play=classpath:prompts/welcome.wav
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     Server->>Client: RTP Streaming (20ms packets)
@@ -263,9 +253,9 @@ When the caller decides to abort the call setup before the server has emitted a 
 sequenceDiagram
     autonumber
     participant Client as SIP Caller / Gateway
-    participant Server as "NetAnn Server (micronaut-netann)"
+    participant Server as NetAnn Server (micronaut-netann)
     
-    Client->>Server: "INVITE sip:annc@...;play=tone:440"
+    Client->>Server: INVITE sip:annc@...#59;play=tone:440
     Server-->>Client: 180 Ringing (Provisional)
     Client->>Server: CANCEL sip:annc@... SIP/2.0
     Server->>Server: Match pending transaction via Via branch & Call-ID
@@ -288,7 +278,7 @@ sequenceDiagram
     participant Client as SIP Caller
     participant Server as NetAnn Server
     
-    Client->>Server: "INVITE ...;play=tone:440,500;repeat=3;delay=1000"
+    Client->>Server: INVITE ...#59;play=tone:440,500#59;repeat=3#59;delay=1000
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
@@ -321,7 +311,7 @@ sequenceDiagram
     participant Client as SIP Caller
     participant Server as NetAnn Server
     
-    Client->>Server: "INVITE ...;play=tone:440,1000;repeat=forever;delay=500"
+    Client->>Server: INVITE ...#59;play=tone:440,1000#59;repeat=forever#59;delay=500
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
@@ -347,7 +337,7 @@ sequenceDiagram
     participant Client as SIP Caller
     participant Server as NetAnn Server
     
-    Client->>Server: "INVITE ...;play=tone:440,1000;repeat=forever;duration=3000"
+    Client->>Server: INVITE ...#59;play=tone:440,1000#59;repeat=forever#59;duration=3000
     Server-->>Client: 200 OK (SDP Answer)
     Client->>Server: ACK
     
@@ -458,7 +448,7 @@ sequenceDiagram
     participant Server as NetAnn Server
     
     Note over Client,Server: Establish TCP Connection on Port 5060
-    Client->>Server: "[TCP] INVITE sip:annc@...;play=tone:440;transport=tcp"
+    Client->>Server: [TCP] INVITE sip:annc@...#59;play=tone:440#59;transport=tcp
     Server-->>Client: [TCP] 200 OK (SDP Answer with audio port 10002)
     Client->>Server: [TCP] ACK
     
@@ -599,23 +589,23 @@ In addition to RFC 4240 announcement streaming, `micronaut-netann` implements th
 sequenceDiagram
     autonumber
     participant Client as SIP Caller / Gateway
-    participant Server as "NetAnn Server (VxmlController)"
-    participant Session as "VxmlSession (FIA Runtime)"
+    participant Server as NetAnn Server (VxmlController)
+    participant Session as VxmlSession (FIA Runtime)
     
-    Client->>Server: "INVITE sip:dialog@ms.example.net;voicexml=classpath:vxml/menu.vxml (with SDP Offer)"
+    Client->>Server: INVITE sip:dialog@ms.example.net#59;voicexml=classpath:vxml/menu.vxml (with SDP Offer)
     Server->>Server: Parse & validate VoiceXML document, allocate RTP port
-    Server-->>Client: 200 OK (SDP Answer, Contact: <sip:dialog@...>)
+    Server-->>Client: 200 OK (SDP Answer, Contact: sip:dialog@...)
     Client->>Server: ACK sip:dialog@ms.example.net SIP/2.0
     Server->>Session: start() -> initialize documentScope & dialogScope
-    Session->>Client: 20ms RTP Audio Stream (Menu prompt: "Press 1 for Sales...")
-    Note over Client,Server: Client presses '1' on keypad mid-prompt
-    Client->>Server: "INFO sip:dialog@... (application/dtmf-relay: Signal=1)"
+    Session->>Client: 20ms RTP Audio Stream (Menu prompt: Press 1 for Sales...)
+    Note over Client,Server: Client presses 1 on keypad mid-prompt
+    Client->>Server: INFO sip:dialog@... (application/dtmf-relay: Signal=1)
     Server-->>Client: 200 OK (X-Received-DTMF: 1)
-    Server->>Session: onDtmf('1') -> Barge-in cuts off RTP prompt immediately
-    Session->>Session: Match choice (dtmf="1" -> goto "#salesForm")
-    Session->>Client: 20ms RTP Audio Stream (Sales prompt: "Connecting to Sales...")
-    Session->>Session: Execute <exit/> tag; dialog complete
-    Server->>Client: "BYE sip:caller@... SIP/2.0"
+    Server->>Session: onDtmf(1) -> Barge-in cuts off RTP prompt immediately
+    Session->>Session: Match choice (dtmf=1 -> goto #salesForm)
+    Session->>Client: 20ms RTP Audio Stream (Sales prompt: Connecting to Sales...)
+    Session->>Session: Execute exit tag, dialog complete
+    Server->>Client: BYE sip:caller@... SIP/2.0
     Client-->>Server: 200 OK
 ```
 

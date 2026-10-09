@@ -41,35 +41,51 @@ Feature: Basic Audio Call Setup and Teardown (RFC 3261)
     And the dialog between "Alice" and "Bob" is in state "TERMINATED"
 ```
 
+```mermaid
+sequenceDiagram
+    autonumber
+    Alice->>Bob: INVITE (SDP offer: PCMU @ 4000)
+    Bob-->>Alice: 180 Ringing
+    Bob-->>Alice: 200 OK (SDP answer: PCMU @ 5000)
+    Alice->>Bob: ACK
+    Note over Alice,Bob: Dialog state: CONFIRMED
+    Alice->>Bob: BYE
+    Bob-->>Alice: 200 OK
+    Note over Alice,Bob: Dialog state: TERMINATED
+```
+
 ---
 
 ## Core Architecture
 
-```
-       Gherkin Feature File (.feature)
-                     │
-                     ▼
-       Cucumber-JVM Step Definitions
-                     │
-                     ▼
-  ┌────────────────────────────────────────────────────────┐
-  │                 micronaut-sip-bdd                      │
-  │  ┌───────────────────────┐  ┌────────────────────────┐ │
-  │  │   VirtualUserAgent    │  │       SipMailbox       │ │
-  │  │ (Alice, Bob, Carol)   │  │ (Wait/Notify Awaiter)  │ │
-  │  └───────────────────────┘  └────────────────────────┘ │
-  │  ┌───────────────────────┐  ┌────────────────────────┐ │
-  │  │    ScenarioContext    │  │   CallLadderRecorder   │ │
-  │  │  (Variables & State)  │  │  (Mermaid Diagnostics) │ │
-  │  └───────────────────────┘  └────────────────────────┘ │
-  └────────────────────────────────────────────────────────┘
-            │                               │
-     Netty Signaling                 SDP / Media
-            ▼                               ▼
-  ┌──────────────────┐            ┌──────────────────┐
-  │  micronaut-sip   │            │  micronaut-sdp   │
-  │ (UDP Transport)  │            │  (Offer/Answer)  │
-  └──────────────────┘            └──────────────────┘
+```mermaid
+flowchart TD
+    Feature["Gherkin Feature File (.feature)"]
+    Steps["Cucumber-JVM Step Definitions"]
+
+    subgraph BDD["micronaut-sip-bdd"]
+        subgraph Agents["Virtual Actors & Mailbox"]
+            VUA["VirtualUserAgent<br/>(Alice, Bob, Carol)"]
+            Mailbox["SipMailbox<br/>(Wait/Notify Awaiter)"]
+        end
+        subgraph Diagnostics["State & Diagnostics"]
+            Context["ScenarioContext<br/>(Variables & State)"]
+            Recorder["CallLadderRecorder<br/>(Mermaid Diagnostics)"]
+        end
+    end
+
+    subgraph Stacks["Underlying Reactive Modules"]
+        SIP["micronaut-sip<br/>(UDP Transport)"]
+        SDP["micronaut-sdp<br/>(Offer/Answer)"]
+    end
+
+    Feature --> Steps
+    Steps --> Context
+    Steps --> VUA
+    VUA <--> Mailbox
+    VUA --> Recorder
+    VUA -->|"Netty Signaling"| SIP
+    VUA -->|"SDP / Media"| SDP
 ```
 
 ### Key Components
