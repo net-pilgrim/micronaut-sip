@@ -10,7 +10,6 @@ import net.pilgrim.sip.config.SipServerConfiguration;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
 import net.pilgrim.sip.rtp.media.RtpMediaManager;
-import net.pilgrim.sip.rtp.media.RtpMediaSession;
 import net.pilgrim.sip.sdp.SdpNegotiator;
 import net.pilgrim.sip.session.SipSession;
 import net.pilgrim.sip.transport.SipNettyServer;
@@ -19,6 +18,8 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Controller handling high-latency callee scenarios (INVITE to "slow"),
@@ -42,7 +43,7 @@ public class SlowCallController extends BaseSipController {
                               @Nullable SipNettyServer sipServer,
                               @Nullable SipServerConfiguration serverConfig) {
         super(sipServer, serverConfig);
-        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+        this.rtpMediaManager = Optional.ofNullable(rtpMediaManager).orElseGet(RtpMediaManager::new);
     }
 
     /**
@@ -56,39 +57,39 @@ public class SlowCallController extends BaseSipController {
                                           @SipBody String sdpOffer,
                                           SipSession session) {
         LOG.info("Received slow INVITE for Call-ID: {}, delaying 350ms to trigger auto 100 Trying", callId);
-        if (session != null) {
-            session.handleInvite(request, sdpOffer);
-            session.setState(SipSession.State.EARLY);
-        }
+        Optional.ofNullable(session).ifPresent(s -> {
+            s.handleInvite(request, sdpOffer);
+            s.setState(SipSession.State.EARLY);
+        });
 
-        int localAudioPort = 49170;
-        try {
-            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception e) {
-            LOG.warn("Failed to allocate dynamic Netty RTP port for slow Call-ID: {}", callId, e);
-        }
+        int localAudioPort = Optional.ofNullable(callId)
+                .flatMap(id -> {
+                    try {
+                        return Optional.of(rtpMediaManager.createSession(id).getLocalPort());
+                    } catch (Exception e) {
+                        LOG.warn("Failed to allocate dynamic Netty RTP port for slow Call-ID: {}", id, e);
+                        return Optional.empty();
+                    }
+                })
+                .orElse(49170);
 
         String advertisedIp = resolveAdvertisedIp();
         String contactUri = buildContactUri(request);
 
-        SipResponse ok;
-        if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
-            if (session != null) {
-                session.setAttribute("sdpAnswer", answer);
-            }
-            ok = SipResponse.ok(request, answer, "application/sdp");
-        } else {
-            if (session != null) {
-                session.setAttribute("awaitingAckSdpAnswer", true);
-            }
-            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
-            if (session != null) {
-                session.setAttribute("localSdpOffer", localOffer);
-            }
-            ok = SipResponse.ok(request, localOffer, "application/sdp");
-        }
+        SipResponse ok = Optional.ofNullable(sdpOffer)
+                .filter(Predicate.not(String::isBlank))
+                .map(offer -> {
+                    String answer = SDP_NEGOTIATOR.createAnswer(offer, localAudioPort, advertisedIp);
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("sdpAnswer", answer));
+                    return SipResponse.ok(request, answer, "application/sdp");
+                })
+                .orElseGet(() -> {
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("awaitingAckSdpAnswer", true));
+                    String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("localSdpOffer", localOffer));
+                    return SipResponse.ok(request, localOffer, "application/sdp");
+                });
+
         ok.getHeaders().setContact(contactUri);
         return Mono.just(ok).delayElement(Duration.ofMillis(350));
     }

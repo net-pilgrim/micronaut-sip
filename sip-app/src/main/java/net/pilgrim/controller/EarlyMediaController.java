@@ -28,6 +28,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Controller handling early-media call flows (RFC 3960 / RFC 3261),
@@ -52,7 +53,7 @@ public class EarlyMediaController extends BaseSipController {
                                 @Nullable SipNettyServer sipServer,
                                 @Nullable SipServerConfiguration serverConfig) {
         super(sipServer, serverConfig);
-        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+        this.rtpMediaManager = Optional.ofNullable(rtpMediaManager).orElseGet(RtpMediaManager::new);
     }
 
     /**
@@ -67,29 +68,28 @@ public class EarlyMediaController extends BaseSipController {
                                                 @SipBody String sdpOffer,
                                                 SipSession session) {
         LOG.info("Received early-media INVITE for Call-ID: {} from: {}", callId, request.getFrom());
-        if (session != null) {
-            session.handleInvite(request, sdpOffer);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleInvite(request, sdpOffer));
 
-        int localAudioPort = 49170;
-        RtpMediaSession mediaSession = null;
-        try {
-            mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception e) {
-            LOG.warn("Failed to allocate dynamic Netty RTP port for early-media Call-ID: {}", callId, e);
-        }
+        Optional<RtpMediaSession> mediaSessionOpt = Optional.ofNullable(callId)
+                .flatMap(id -> {
+                    try {
+                        return Optional.of(rtpMediaManager.createSession(id));
+                    } catch (Exception e) {
+                        LOG.warn("Failed to allocate dynamic Netty RTP port for early-media Call-ID: {}", id, e);
+                        return Optional.empty();
+                    }
+                });
 
+        int localAudioPort = mediaSessionOpt.map(RtpMediaSession::getLocalPort).orElse(49170);
         String advertisedIp = resolveAdvertisedIp();
         String contactUri = buildContactUri(request);
 
-        String sdpAnswer = (sdpOffer != null && !sdpOffer.isBlank())
-                ? SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp)
-                : SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
+        String sdpAnswer = Optional.ofNullable(sdpOffer)
+                .filter(Predicate.not(String::isBlank))
+                .map(offer -> SDP_NEGOTIATOR.createAnswer(offer, localAudioPort, advertisedIp))
+                .orElseGet(() -> SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp));
 
-        if (session != null) {
-            session.setAttribute("sdpAnswer", sdpAnswer);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.setAttribute("sdpAnswer", sdpAnswer));
 
         // 183 Session Progress provisional response carrying SDP Answer
         SipResponse sessionProgress = SipResponse.sessionProgress(request);
@@ -107,61 +107,67 @@ public class EarlyMediaController extends BaseSipController {
             sessionProgress.getHeaders().setRSeq(1);
             if (session != null) {
                 prackSink = Sinks.one();
-                session.getReliableContext().initiate(1L, request.getCSeqNumber(),
-                        request.getMethod() != null ? request.getMethod().name() : "INVITE", prackSink);
+                String cseqMethod = Optional.ofNullable(request.getMethod()).map(Enum::name).orElse("INVITE");
+                session.getReliableContext().initiate(1L, request.getCSeqNumber(), cseqMethod, prackSink);
                 session.setAttribute("rseq", 1L);
                 session.setAttribute("cseqNumber", request.getCSeqNumber());
-                session.setAttribute("cseqMethod", request.getMethod() != null ? request.getMethod().name() : "INVITE");
+                session.setAttribute("cseqMethod", cseqMethod);
                 session.setAttribute("prackSink", prackSink);
             }
         }
 
-        if (session != null) {
-            session.handleProvisional(sessionProgress);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleProvisional(sessionProgress));
 
         // Configure early media duration (default: 800ms)
-        long earlyMediaMs = 800;
-        String customDuration = request.getHeaders().get("X-Early-Media-Duration");
-        if (customDuration != null) {
-            try {
-                earlyMediaMs = Long.parseLong(customDuration);
-            } catch (NumberFormatException ignored) {}
-        }
+        long earlyMediaMs = Optional.ofNullable(request.getHeaders().get("X-Early-Media-Duration"))
+                .flatMap(d -> {
+                    try {
+                        return Optional.of(Long.parseLong(d));
+                    } catch (NumberFormatException ignored) {
+                        return Optional.empty();
+                    }
+                })
+                .orElse(800L);
 
         // Stream in-band ringback tone early media over RTP
-        if (mediaSession != null && sdpOffer != null && !sdpOffer.isBlank()) {
-            try {
-                SdpMessage parsed = SDP_PARSER.parse(sdpOffer);
-                SdpMessage.MediaDescription audio = parsed.findFirstAudioMedia();
-                if (audio != null && audio.getPort() > 0) {
-                    String host = parseConnectionHost(parsed.getConnection()).orElse("127.0.0.1");
-                    mediaSession.setRemoteAddress(new InetSocketAddress(InetAddress.getByName(host), audio.getPort()));
-                    mediaSession.setCodec(new G711UlawCodec());
-                    byte[] ringbackPcm = generateRingbackTone((int) earlyMediaMs);
-                    mediaSession.playAudio(ringbackPcm, null);
-                    LOG.info("Started early media ringback audio streaming for Call-ID: {} to {}:{} ({} ms)",
-                            callId, host, audio.getPort(), earlyMediaMs);
-                }
-            } catch (Exception e) {
-                LOG.warn("Failed to initiate early media RTP streaming for Call-ID: {}", callId, e);
-            }
-        }
+        mediaSessionOpt.ifPresent(mediaSession ->
+                Optional.ofNullable(sdpOffer)
+                        .filter(Predicate.not(String::isBlank))
+                        .ifPresent(offer -> {
+                            try {
+                                SdpMessage parsed = SDP_PARSER.parse(offer);
+                                Optional.ofNullable(parsed.findFirstAudioMedia())
+                                        .filter(audio -> audio.getPort() > 0)
+                                        .ifPresent(audio -> {
+                                            try {
+                                                String host = parseConnectionHost(parsed.getConnection()).orElse("127.0.0.1");
+                                                mediaSession.setRemoteAddress(new InetSocketAddress(InetAddress.getByName(host), audio.getPort()));
+                                                mediaSession.setCodec(new G711UlawCodec());
+                                                byte[] ringbackPcm = generateRingbackTone((int) earlyMediaMs);
+                                                mediaSession.playAudio(ringbackPcm, null);
+                                                LOG.info("Started early media ringback audio streaming for Call-ID: {} to {}:{} ({} ms)",
+                                                        callId, host, audio.getPort(), earlyMediaMs);
+                                            } catch (Exception e) {
+                                                LOG.warn("Failed to initiate early media RTP streaming for Call-ID: {}", callId, e);
+                                            }
+                                        });
+                            } catch (Exception e) {
+                                LOG.warn("Failed to parse SDP offer for early media RTP streaming, Call-ID: {}", callId, e);
+                            }
+                        })
+        );
 
         // 200 OK final response (call answered)
         SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
         ok.getHeaders().setContact(contactUri);
-        if (sessionProgress.getTo() != null) {
-            ok.getHeaders().setTo(sessionProgress.getTo());
-        }
+        Optional.ofNullable(sessionProgress.getTo()).ifPresent(ok.getHeaders()::setTo);
 
-        Mono<SipResponse> delayedOk = Mono.just(ok).delayElement(Duration.ofMillis(earlyMediaMs));
-        if (prackSink != null) {
-            delayedOk = Mono.when(
-                    prackSink.asMono().timeout(Duration.ofSeconds(5), Mono.empty()),
-                    Mono.delay(Duration.ofMillis(earlyMediaMs))
-            ).thenReturn(ok);
-        }
+        Mono<SipResponse> delayedOk = Optional.ofNullable(prackSink)
+                .map(sink -> Mono.when(
+                        sink.asMono().timeout(Duration.ofSeconds(5), Mono.empty()),
+                        Mono.delay(Duration.ofMillis(earlyMediaMs))
+                ).thenReturn(ok))
+                .orElseGet(() -> Mono.just(ok).delayElement(Duration.ofMillis(earlyMediaMs)));
 
         return Flux.concat(
                 Mono.just(sessionProgress),
@@ -195,13 +201,11 @@ public class EarlyMediaController extends BaseSipController {
     }
 
     private Optional<String> parseConnectionHost(String connectionLine) {
-        if (connectionLine == null || connectionLine.isBlank()) {
-            return Optional.empty();
-        }
-        String[] parts = connectionLine.trim().split("\\s+");
-        if (parts.length < 3 || parts[2].isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.of(parts[2].trim());
+        return Optional.ofNullable(connectionLine)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .map(line -> line.split("\\s+"))
+                .filter(parts -> parts.length >= 3 && !parts[2].isBlank())
+                .map(parts -> parts[2].trim());
     }
 }

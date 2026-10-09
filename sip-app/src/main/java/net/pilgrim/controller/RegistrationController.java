@@ -2,11 +2,7 @@ package net.pilgrim.controller;
 
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
-import net.pilgrim.sip.annotation.OnRegister;
-import net.pilgrim.sip.annotation.SipController;
-import net.pilgrim.sip.annotation.SipHeader;
-import net.pilgrim.sip.annotation.SipParam;
-import net.pilgrim.sip.annotation.SipTo;
+import net.pilgrim.sip.annotation.*;
 import net.pilgrim.sip.config.SipServerConfiguration;
 import net.pilgrim.sip.model.SipHeaders;
 import net.pilgrim.sip.model.SipRequest;
@@ -15,6 +11,9 @@ import net.pilgrim.sip.model.SipUri;
 import net.pilgrim.sip.transport.SipNettyServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Controller handling SIP user registrations (REGISTER) per RFC 3261 Section 10.
@@ -42,15 +41,16 @@ public class RegistrationController extends BaseSipController {
                                   @SipTo SipUri toUri,
                                   @SipParam(value = "transport", defaultValue = "udp") String transport,
                                   @SipHeader(value = "Contact", required = false) String contact) {
-        String user = (toUri != null && toUri.getUser() != null) ? toUri.getUser() : "";
-        LOG.info("Received REGISTER request for user: {} transport: {} Contact: {}", user, transport, contact);
+        Optional<String> user = Optional.ofNullable(toUri)
+                .map(SipUri::getUser)
+                .filter(Predicate.not(String::isBlank));
+
+        LOG.info("Received REGISTER request for user: {} transport: {} Contact: {}",
+                user.orElse(""), transport, contact);
+
         SipResponse response = SipResponse.ok(request);
-        if (contact != null) {
-            response.getHeaders().setContact(contact);
-        }
-        if (!user.isEmpty()) {
-            response.getHeaders().set("X-Registered-User", user);
-        }
+        Optional.ofNullable(contact).ifPresent(response.getHeaders()::setContact);
+        user.ifPresent(u -> response.getHeaders().set("X-Registered-User", u));
         response.getHeaders().set("X-Transport-Param", transport);
         response.getHeaders().set(SipHeaders.EXPIRES, "3600");
         return response;

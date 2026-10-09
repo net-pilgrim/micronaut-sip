@@ -7,6 +7,7 @@ import net.pilgrim.mailbox.config.MailboxConfiguration;
 import net.pilgrim.mailbox.service.MailboxRecordingService;
 import net.pilgrim.mailbox.service.MailboxSession;
 import net.pilgrim.sip.annotation.*;
+import net.pilgrim.sip.config.SipServerConfiguration;
 import net.pilgrim.sip.dtmf.DtmfSignal;
 import net.pilgrim.sip.model.*;
 import net.pilgrim.sip.rtp.media.RtpMediaManager;
@@ -28,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +37,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /**
  * SIP Controller handling calls to {@code mailbox@<sip-ip>}.
@@ -70,12 +73,12 @@ public class MailboxController {
                              @Nullable TtsClient ttsClient,
                              @Nullable SipNettyServer sipServer,
                              @Nullable SipSessionManager sessionManager) {
-        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+        this.rtpMediaManager = Optional.ofNullable(rtpMediaManager).orElseGet(RtpMediaManager::new);
         this.recordingService = recordingService;
-        this.config = config != null ? config : new MailboxConfiguration();
-        this.documentLoader = documentLoader != null ? documentLoader : new VxmlDocumentLoader();
-        this.audioLoader = audioLoader != null ? audioLoader : new DefaultVxmlAudioLoader();
-        this.ttsClient = ttsClient != null ? ttsClient : new DefaultTtsClient();
+        this.config = Optional.ofNullable(config).orElseGet(MailboxConfiguration::new);
+        this.documentLoader = Optional.ofNullable(documentLoader).orElseGet(VxmlDocumentLoader::new);
+        this.audioLoader = Optional.ofNullable(audioLoader).orElseGet(DefaultVxmlAudioLoader::new);
+        this.ttsClient = Optional.ofNullable(ttsClient).orElseGet(DefaultTtsClient::new);
         this.sipServer = sipServer;
         this.sessionManager = sessionManager;
     }
@@ -99,8 +102,10 @@ public class MailboxController {
             return Mono.just(overloaded);
         }
 
-        String clientIp = (request.getRemoteAddress() != null && request.getRemoteAddress().getAddress() != null)
-                ? request.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1";
+        String clientIp = Optional.ofNullable(request.getRemoteAddress())
+                .map(InetSocketAddress::getAddress)
+                .map(InetAddress::getHostAddress)
+                .orElse("127.0.0.1");
 
         AtomicInteger ipCounter = activeCallsPerIp.computeIfAbsent(clientIp, k -> new AtomicInteger(0));
         if (ipCounter.incrementAndGet() > config.getMaxCallsPerIp()) {
@@ -116,42 +121,45 @@ public class MailboxController {
         return Mono.fromCallable(() -> documentLoader.loadDocument(config.getPromptVxml()))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(vxmlDoc -> {
-                    int localAudioPort = 49170;
-                    try {
-                        RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-                        localAudioPort = mediaSession.getLocalPort();
-                    } catch (Exception e) {
-                        LOG.warn("Failed creating RTP media session for Call-ID: {}", callId, e);
-                    }
+                    int localAudioPort = Optional.ofNullable(callId)
+                            .flatMap(id -> {
+                                try {
+                                    return Optional.of(rtpMediaManager.createSession(id).getLocalPort());
+                                } catch (Exception e) {
+                                    LOG.warn("Failed creating RTP media session for Call-ID: {}", id, e);
+                                    return Optional.empty();
+                                }
+                            })
+                            .orElse(49170);
 
                     String advertisedIp = resolveAdvertisedIp();
-                    String sdpAnswer = (sdpOffer != null && !sdpOffer.isBlank())
-                            ? sdpNegotiator.createAnswer(sdpOffer, localAudioPort, advertisedIp)
-                            : sdpNegotiator.createOffer(localAudioPort, advertisedIp);
+                    String sdpAnswer = Optional.ofNullable(sdpOffer)
+                            .filter(Predicate.not(String::isBlank))
+                            .map(offer -> sdpNegotiator.createAnswer(offer, localAudioPort, advertisedIp))
+                            .orElseGet(() -> sdpNegotiator.createOffer(localAudioPort, advertisedIp));
 
                     String mailboxOwner = extractMailboxOwner(request.getUri()).orElse(null);
-                    if (session != null) {
-                        session.setState(SipSession.State.EARLY);
-                        session.setAttribute("vxmlDoc", vxmlDoc);
-                        session.setAttribute("sdpOffer", sdpOffer);
-                        session.setAttribute("originalInvite", request);
-                        session.setAttribute("mailboxOwner", mailboxOwner);
-                    }
+                    Optional.ofNullable(session).ifPresent(s -> {
+                        s.setState(SipSession.State.EARLY);
+                        s.setAttribute("vxmlDoc", vxmlDoc);
+                        s.setAttribute("sdpOffer", sdpOffer);
+                        s.setAttribute("originalInvite", request);
+                        s.setAttribute("mailboxOwner", mailboxOwner);
+                    });
 
                     int serverPort = (request.getTransport() == SipTransport.TCP)
-                            ? (sipServer != null ? sipServer.getTcpPort() : 5060)
-                            : (sipServer != null ? sipServer.getUdpPort() : 5060);
+                            ? Optional.ofNullable(sipServer).map(SipNettyServer::getTcpPort).orElse(5060)
+                            : Optional.ofNullable(sipServer).map(SipNettyServer::getUdpPort).orElse(5060);
 
                     SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
-                    String contactUser = (request.getUri() != null && request.getUri().getUser() != null)
-                            ? request.getUri().getUser() : config.getUser();
+                    String contactUser = Optional.ofNullable(request.getUri())
+                            .map(SipUri::getUser)
+                            .orElseGet(config::getUser);
                     String contactUri = "<sip:" + contactUser + "@" + advertisedIp + ":" + serverPort
                             + (request.getTransport() == SipTransport.TCP ? ";transport=tcp" : "") + ">";
                     ok.getHeaders().setContact(contactUri);
 
-                    if (session != null) {
-                        session.setAttribute("originalOk", ok);
-                    }
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("originalOk", ok));
 
                     return Mono.just(ok);
                 })
@@ -171,9 +179,7 @@ public class MailboxController {
                              @SipCallId String callId,
                              SipSession session) {
         LOG.info("Received ACK for Mailbox Call-ID: {}, starting answering machine dialog.", callId);
-        if (session != null) {
-            session.setState(SipSession.State.CONFIRMED);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.setState(SipSession.State.CONFIRMED));
 
         Optional<RtpMediaSession> mediaSessionOpt = rtpMediaManager.findSession(callId);
         if (mediaSessionOpt.isEmpty()) {
@@ -183,36 +189,40 @@ public class MailboxController {
         RtpMediaSession mediaSession = mediaSessionOpt.get();
 
         // Connect remote RTP address from SDP offer
-        String remoteSdp = (session != null) ? session.getAttribute("sdpOffer") : null;
-        if (remoteSdp != null && !remoteSdp.isBlank()) {
-            try {
-                SdpMessage parsed = sdpParser.parse(remoteSdp);
-                SdpMessage.MediaDescription audio = parsed.findFirstAudioMedia();
-                if (audio != null && audio.getPort() > 0) {
-                    String host = parseConnectionHost(parsed.getConnection())
-                            .orElse((request.getRemoteAddress() != null && request.getRemoteAddress().getAddress() != null)
-                                    ? request.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1");
-                    mediaSession.setRemoteAddress(new InetSocketAddress(host, audio.getPort()));
-                    LOG.info("Configured remote RTP destination {}:{} for Call-ID: {}", host, audio.getPort(), callId);
-                }
-            } catch (Exception e) {
-                LOG.warn("Failed parsing SDP offer for Call-ID: {}", callId, e);
-            }
-        }
+        Optional.ofNullable(session)
+                .map(s -> (String) s.getAttribute("sdpOffer"))
+                .filter(Predicate.not(String::isBlank))
+                .ifPresent(remoteSdp -> {
+                    try {
+                        SdpMessage parsed = sdpParser.parse(remoteSdp);
+                        Optional.ofNullable(parsed.findFirstAudioMedia())
+                                .filter(audio -> audio.getPort() > 0)
+                                .ifPresent(audio -> {
+                                    String host = parseConnectionHost(parsed.getConnection())
+                                            .or(() -> Optional.ofNullable(request.getRemoteAddress())
+                                                    .map(InetSocketAddress::getAddress)
+                                                    .map(InetAddress::getHostAddress))
+                                            .orElse("127.0.0.1");
+                                    mediaSession.setRemoteAddress(new InetSocketAddress(host, audio.getPort()));
+                                    LOG.info("Configured remote RTP destination {}:{} for Call-ID: {}", host, audio.getPort(), callId);
+                                });
+                    } catch (Exception e) {
+                        LOG.warn("Failed parsing SDP offer for Call-ID: {}", callId, e);
+                    }
+                });
 
-        VxmlDocument vxmlDoc = (session != null) ? session.getAttribute("vxmlDoc") : null;
-        SipRequest originalInvite = (session != null) ? session.getAttribute("originalInvite") : null;
-        SipResponse originalOk = (session != null) ? session.getAttribute("originalOk") : null;
-        String mailboxOwner = (session != null) ? session.getAttribute("mailboxOwner") : null;
-        if (mailboxOwner == null && originalInvite != null) {
-            mailboxOwner = extractMailboxOwner(originalInvite.getUri()).orElse(null);
-        }
-        if (mailboxOwner == null) {
-            mailboxOwner = extractMailboxOwner(request.getUri()).orElse(null);
-        }
+        VxmlDocument vxmlDoc = Optional.ofNullable(session).map(s -> (VxmlDocument) s.getAttribute("vxmlDoc")).orElse(null);
+        SipRequest originalInvite = Optional.ofNullable(session).map(s -> (SipRequest) s.getAttribute("originalInvite")).orElse(null);
+        SipResponse originalOk = Optional.ofNullable(session).map(s -> (SipResponse) s.getAttribute("originalOk")).orElse(null);
+        String mailboxOwner = Optional.ofNullable(session)
+                .map(s -> (String) s.getAttribute("mailboxOwner"))
+                .or(() -> Optional.ofNullable(originalInvite).map(SipRequest::getUri).flatMap(MailboxController::extractMailboxOwner))
+                .or(() -> Optional.ofNullable(request.getUri()).flatMap(MailboxController::extractMailboxOwner))
+                .orElse(null);
 
-        String caller = (originalInvite != null && originalInvite.getFrom() != null)
-                ? originalInvite.getFrom() : "anonymous";
+        String caller = Optional.ofNullable(originalInvite)
+                .map(SipRequest::getFrom)
+                .orElse("anonymous");
 
         MailboxSession mailboxSession = new MailboxSession(
                 callId,
@@ -229,12 +239,13 @@ public class MailboxController {
 
         activeSessions.put(callId, mailboxSession);
 
-        if (vxmlDoc != null) {
-            mailboxSession.start(vxmlDoc, documentLoader, audioLoader, ttsClient);
-        } else {
-            LOG.warn("No VoiceXML document present for Mailbox Call-ID: {}, terminating call.", callId);
-            terminateAndSendBye(mailboxSession);
-        }
+        Optional.ofNullable(vxmlDoc).ifPresentOrElse(
+                doc -> mailboxSession.start(doc, documentLoader, audioLoader, ttsClient),
+                () -> {
+                    LOG.warn("No VoiceXML document present for Mailbox Call-ID: {}, terminating call.", callId);
+                    terminateAndSendBye(mailboxSession);
+                }
+        );
     }
 
     // ==========================================
@@ -246,10 +257,7 @@ public class MailboxController {
                                           @SipCallId String callId,
                                           SipSession session) {
         LOG.info("Received BYE for Mailbox Call-ID: {}", callId);
-        MailboxSession mailboxSession = activeSessions.remove(callId);
-        if (mailboxSession != null) {
-            mailboxSession.onCallerHangup();
-        }
+        Optional.ofNullable(activeSessions.remove(callId)).ifPresent(MailboxSession::onCallerHangup);
         cleanupCall(callId, session);
         return Mono.just(SipResponse.ok(request));
     }
@@ -263,17 +271,15 @@ public class MailboxController {
                                            @SipCallId String callId,
                                            @Nullable @SipDtmf DtmfSignal dtmf,
                                            SipSession session) {
-        if (dtmf != null) {
-            LOG.info("Received DTMF '{}' via INFO for Mailbox Call-ID: {}", dtmf.getDigit(), callId);
-            MailboxSession mailboxSession = activeSessions.get(callId);
-            if (mailboxSession != null) {
-                mailboxSession.onDtmf(dtmf.getDigit());
-            }
-            SipResponse response = SipResponse.ok(request);
-            response.getHeaders().set("X-Received-DTMF", String.valueOf(dtmf.getDigit()));
-            return Mono.just(response);
-        }
-        return Mono.just(SipResponse.ok(request));
+        return Optional.ofNullable(dtmf)
+                .map(signal -> {
+                    LOG.info("Received DTMF '{}' via INFO for Mailbox Call-ID: {}", signal.getDigit(), callId);
+                    Optional.ofNullable(activeSessions.get(callId)).ifPresent(ms -> ms.onDtmf(signal.getDigit()));
+                    SipResponse response = SipResponse.ok(request);
+                    response.getHeaders().set("X-Received-DTMF", String.valueOf(signal.getDigit()));
+                    return Mono.just(response);
+                })
+                .orElseGet(() -> Mono.just(SipResponse.ok(request)));
     }
 
     // ==========================================
@@ -318,15 +324,11 @@ public class MailboxController {
         }
 
         try {
-            String targetUri = originalInvite.getContact();
-            if (targetUri == null || targetUri.isEmpty()) {
-                targetUri = originalInvite.getFrom();
-            }
-            if (targetUri != null) {
-                targetUri = targetUri.replaceAll("^<|>$", "").split(";")[0];
-            } else {
-                targetUri = originalInvite.getUri().toString();
-            }
+            String targetUri = Optional.ofNullable(originalInvite.getContact())
+                    .filter(Predicate.not(String::isEmpty))
+                    .or(() -> Optional.ofNullable(originalInvite.getFrom()))
+                    .map(uri -> uri.replaceAll("^<|>$", "").split(";")[0])
+                    .orElseGet(() -> originalInvite.getUri().toString());
 
             SipRequest bye = new SipRequest(SipMethod.BYE, SipUri.parse(targetUri));
             bye.setRemoteAddress(originalInvite.getRemoteAddress());
@@ -353,60 +355,58 @@ public class MailboxController {
     }
 
     private void releaseClientIp(String callId) {
-        String clientIp = callIdToClientIp.remove(callId);
-        if (clientIp != null) {
+        Optional.ofNullable(callIdToClientIp.remove(callId)).ifPresent(clientIp -> {
             AtomicInteger counter = activeCallsPerIp.get(clientIp);
             if (counter != null && counter.decrementAndGet() <= 0) {
                 activeCallsPerIp.remove(clientIp, counter);
             }
-        }
+        });
     }
 
     private void cleanupCall(String callId, @Nullable SipSession session) {
         releaseClientIp(callId);
-        MailboxSession mailboxSession = activeSessions.remove(callId);
-        if (mailboxSession != null) {
-            mailboxSession.terminate();
-        }
-        if (session != null) {
-            session.setState(SipSession.State.TERMINATED);
-        } else if (sessionManager != null) {
-            sessionManager.findSession(callId).ifPresent(s -> s.setState(SipSession.State.TERMINATED));
-        }
+        Optional.ofNullable(activeSessions.remove(callId)).ifPresent(MailboxSession::terminate);
+        Optional.ofNullable(session)
+                .ifPresentOrElse(
+                        s -> s.setState(SipSession.State.TERMINATED),
+                        () -> Optional.ofNullable(sessionManager)
+                                .flatMap(sm -> sm.findSession(callId))
+                                .ifPresent(s -> s.setState(SipSession.State.TERMINATED))
+                );
         rtpMediaManager.terminateSession(callId);
     }
 
     private String resolveAdvertisedIp() {
-        if (config.getAdvertisedIp() != null && !config.getAdvertisedIp().isBlank()) {
-            return config.getAdvertisedIp().trim();
-        }
-        if (sipServer != null && sipServer.getConfiguration() != null) {
-            return sipServer.getConfiguration().resolveAdvertisedIp();
-        }
-        return "127.0.0.1";
+        return Optional.ofNullable(config.getAdvertisedIp())
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .or(() -> Optional.ofNullable(sipServer)
+                        .map(SipNettyServer::getConfiguration)
+                        .map(SipServerConfiguration::resolveAdvertisedIp))
+                .orElse("127.0.0.1");
     }
 
     private Optional<String> parseConnectionHost(String connectionLine) {
-        if (connectionLine == null || connectionLine.isBlank()) {
-            return Optional.empty();
-        }
-        String[] parts = connectionLine.trim().split("\\s+");
-        if (parts.length < 3 || parts[2].isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.of(parts[2].trim());
+        return Optional.ofNullable(connectionLine)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .map(line -> line.split("\\s+"))
+                .filter(parts -> parts.length >= 3 && !parts[2].isBlank())
+                .map(parts -> parts[2].trim());
     }
 
     public static Optional<String> extractMailboxOwner(SipUri uri) {
-        if (uri == null || uri.getUser() == null || uri.getUser().isBlank()) {
-            return Optional.empty();
-        }
-        String user = uri.getUser().trim();
-        int plusIdx = user.indexOf('+');
-        if (plusIdx > 0 && user.substring(plusIdx + 1).equalsIgnoreCase("mailbox")) {
-            return Optional.of(user.substring(0, plusIdx));
-        }
-        return Optional.empty();
+        return Optional.ofNullable(uri)
+                .map(SipUri::getUser)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .flatMap(user -> {
+                    int plusIdx = user.indexOf('+');
+                    if (plusIdx > 0 && user.substring(plusIdx + 1).equalsIgnoreCase("mailbox")) {
+                        return Optional.of(user.substring(0, plusIdx));
+                    }
+                    return Optional.empty();
+                });
     }
 
     public Map<String, MailboxSession> getActiveSessions() {

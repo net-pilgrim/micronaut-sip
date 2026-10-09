@@ -31,6 +31,7 @@ import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Primary reactive SIP Controller handling standard two-party call setup (INVITE),
@@ -60,7 +61,7 @@ public class CallController extends BaseSipController {
                           @Nullable SipNettyServer sipServer,
                           @Nullable SipServerConfiguration serverConfig) {
         super(sipServer, serverConfig);
-        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+        this.rtpMediaManager = Optional.ofNullable(rtpMediaManager).orElseGet(RtpMediaManager::new);
     }
 
     public RtpMediaManager getRtpMediaManager() {
@@ -77,27 +78,27 @@ public class CallController extends BaseSipController {
                                       @SipBody String sdpOffer,
                                       SipSession session) {
         LOG.info("Received INVITE for Call-ID: {} from: {} to: {}", callId, request.getFrom(), request.getTo());
-        if (sdpOffer != null && !sdpOffer.isEmpty()) {
-            LOG.info("Received SDP offer ({} bytes)", sdpOffer.length());
-        }
+        Optional.ofNullable(sdpOffer)
+                .filter(Predicate.not(String::isEmpty))
+                .ifPresent(offer -> LOG.info("Received SDP offer ({} bytes)", offer.length()));
 
-        if (session != null) {
-            session.handleInvite(request, sdpOffer);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleInvite(request, sdpOffer));
 
-        int localAudioPort = 49170;
-        try {
-            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception e) {
-            LOG.warn("Failed to allocate dynamic Netty RTP port for Call-ID: {}", callId, e);
-        }
+        int localAudioPort = Optional.ofNullable(callId)
+                .flatMap(id -> {
+                    try {
+                        return Optional.of(rtpMediaManager.createSession(id).getLocalPort());
+                    } catch (Exception e) {
+                        LOG.warn("Failed to allocate dynamic Netty RTP port for Call-ID: {}", id, e);
+                        return Optional.empty();
+                    }
+                })
+                .orElse(49170);
 
         // 180 Ringing provisional response
         SipResponse ringing = SipResponse.ringing(request);
-        if (session != null) {
-            session.handleProvisional(ringing);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleProvisional(ringing));
+
         String advertisedIp = resolveAdvertisedIp();
         String contactUri = buildContactUri(request);
 
@@ -112,53 +113,49 @@ public class CallController extends BaseSipController {
             ringing.getHeaders().setContact(contactUri);
             if (session != null) {
                 prackSink = Sinks.one();
-                session.getReliableContext().initiate(1L, request.getCSeqNumber(),
-                        request.getMethod() != null ? request.getMethod().name() : "INVITE", prackSink);
+                String cseqMethod = Optional.ofNullable(request.getMethod()).map(Enum::name).orElse("INVITE");
+                session.getReliableContext().initiate(1L, request.getCSeqNumber(), cseqMethod, prackSink);
                 session.setAttribute("rseq", 1L);
                 session.setAttribute("cseqNumber", request.getCSeqNumber());
-                session.setAttribute("cseqMethod", request.getMethod() != null ? request.getMethod().name() : "INVITE");
+                session.setAttribute("cseqMethod", cseqMethod);
                 session.setAttribute("prackSink", prackSink);
             }
         }
 
         // 200 OK carries SDP answer for early-offer INVITE and SDP offer for late-offer INVITE.
-        SipResponse ok;
-        if (sdpOffer != null && !sdpOffer.isBlank()) {
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort, advertisedIp);
-            if (session != null) {
-                session.setAttribute("sdpAnswer", answer);
-            }
-            ok = SipResponse.ok(request, answer, "application/sdp");
-        } else {
-            if (session != null) {
-                session.setAttribute("awaitingAckSdpAnswer", true);
-            }
-            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
-            if (session != null) {
-                session.setAttribute("localSdpOffer", localOffer);
-            }
-            ok = SipResponse.ok(request, localOffer, "application/sdp");
-        }
+        SipResponse ok = Optional.ofNullable(sdpOffer)
+                .filter(Predicate.not(String::isBlank))
+                .map(offer -> {
+                    String answer = SDP_NEGOTIATOR.createAnswer(offer, localAudioPort, advertisedIp);
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("sdpAnswer", answer));
+                    return SipResponse.ok(request, answer, "application/sdp");
+                })
+                .orElseGet(() -> {
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("awaitingAckSdpAnswer", true));
+                    String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp);
+                    Optional.ofNullable(session).ifPresent(s -> s.setAttribute("localSdpOffer", localOffer));
+                    return SipResponse.ok(request, localOffer, "application/sdp");
+                });
+
         ok.getHeaders().setContact(contactUri);
-        if (ringing.getTo() != null) {
-            ok.getHeaders().setTo(ringing.getTo());
-        }
+        Optional.ofNullable(ringing.getTo()).ifPresent(ok.getHeaders()::setTo);
 
-        long delayMs = 300;
-        String pickupDelay = request.getHeaders().get("X-Pickup-Delay");
-        if (pickupDelay != null) {
-            try {
-                delayMs = Long.parseLong(pickupDelay);
-            } catch (NumberFormatException ignored) {}
-        }
+        long delayMs = Optional.ofNullable(request.getHeaders().get("X-Pickup-Delay"))
+                .flatMap(d -> {
+                    try {
+                        return Optional.of(Long.parseLong(d));
+                    } catch (NumberFormatException ignored) {
+                        return Optional.empty();
+                    }
+                })
+                .orElse(300L);
 
-        Mono<SipResponse> delayedOk = Mono.just(ok).delayElement(Duration.ofMillis(delayMs));
-        if (prackSink != null) {
-            delayedOk = Mono.when(
-                    prackSink.asMono().timeout(Duration.ofSeconds(5), Mono.empty()),
-                    Mono.delay(Duration.ofMillis(delayMs))
-            ).thenReturn(ok);
-        }
+        Mono<SipResponse> delayedOk = Optional.ofNullable(prackSink)
+                .map(sink -> Mono.when(
+                        sink.asMono().timeout(Duration.ofSeconds(5), Mono.empty()),
+                        Mono.delay(Duration.ofMillis(delayMs))
+                ).thenReturn(ok))
+                .orElseGet(() -> Mono.just(ok).delayElement(Duration.ofMillis(delayMs)));
 
         // Reactively emit 180 Ringing immediately, then 200 OK after delayMs (simulating call pickup)
         return Flux.concat(
@@ -176,19 +173,20 @@ public class CallController extends BaseSipController {
                       @SipCallId String callId,
                       @SipBody String ackSdpAnswer,
                       SipSession session) {
-        if (session != null && session.isTerminated()) {
-            LOG.info("Received ACK for terminated Call-ID: {}, ignoring state change.", callId);
-            return;
-        }
-        if (session != null) {
-            var transition = session.handleAck(request, ackSdpAnswer);
-            if (transition.isConfirmed()) {
-                LOG.info("Received ACK for Call-ID: {}, call session is now CONFIRMED.", callId);
-                maybeSendRtpProbe(callId, session);
-            }
-        } else {
-            LOG.info("Received ACK for Call-ID: {} (no session).", callId);
-        }
+        Optional.ofNullable(session).ifPresentOrElse(
+                s -> {
+                    if (s.isTerminated()) {
+                        LOG.info("Received ACK for terminated Call-ID: {}, ignoring state change.", callId);
+                        return;
+                    }
+                    var transition = s.handleAck(request, ackSdpAnswer);
+                    if (transition.isConfirmed()) {
+                        LOG.info("Received ACK for Call-ID: {}, call session is now CONFIRMED.", callId);
+                        maybeSendRtpProbe(callId, s);
+                    }
+                },
+                () -> LOG.info("Received ACK for Call-ID: {} (no session).", callId)
+        );
     }
 
     /**
@@ -200,9 +198,7 @@ public class CallController extends BaseSipController {
                                    @SipCallId String callId,
                                    SipSession session) {
         LOG.info("Received BYE for Call-ID: {}, terminating session.", callId);
-        if (session != null) {
-            session.handleBye(request);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleBye(request));
         rtpMediaManager.terminateSession(callId);
         return Mono.just(SipResponse.ok(request));
     }
@@ -215,9 +211,7 @@ public class CallController extends BaseSipController {
                          @SipCallId String callId,
                          SipSession session) {
         LOG.info("Received CANCEL for Call-ID: {}, terminating session.", callId);
-        if (session != null) {
-            session.handleCancel(request);
-        }
+        Optional.ofNullable(session).ifPresent(s -> s.handleCancel(request));
         rtpMediaManager.terminateSession(callId);
     }
 
@@ -233,18 +227,20 @@ public class CallController extends BaseSipController {
                                      @SipBody String prackBody,
                                      SipSession session) {
         LOG.info("Received PRACK for Call-ID: {} RAck: {}", callId, rack);
-        if (session == null) {
-            LOG.warn("PRACK received for unknown Call-ID: {}", callId);
-            return Mono.just(SipResponse.transactionDoesNotExist(request));
-        }
-
-        var transition = session.handlePrack(request, rack, prackBody);
-        if (transition.isRejected()) {
-            LOG.warn("PRACK RAck mismatch or rejected for Call-ID: {}: {}", callId, transition.message());
-            return Mono.just(SipResponse.transactionDoesNotExist(request));
-        }
-
-        return Mono.just(SipResponse.ok(request));
+        return Optional.ofNullable(session)
+                .map(s -> {
+                    var transition = s.handlePrack(request, rack, prackBody);
+                    if (transition.isRejected()) {
+                        LOG.warn("PRACK RAck mismatch or rejected for Call-ID: {}: {}", callId, transition.message());
+                        return SipResponse.transactionDoesNotExist(request);
+                    }
+                    return SipResponse.ok(request);
+                })
+                .map(Mono::just)
+                .orElseGet(() -> {
+                    LOG.warn("PRACK received for unknown Call-ID: {}", callId);
+                    return Mono.just(SipResponse.transactionDoesNotExist(request));
+                });
     }
 
     /**
@@ -264,17 +260,16 @@ public class CallController extends BaseSipController {
         if (session == null) {
             return;
         }
-        String remoteSdp = session.getAttribute("sdpOffer");
-        if (remoteSdp == null || remoteSdp.isBlank()) {
-            remoteSdp = session.getAttribute("sdpAnswer");
-        }
-        if (remoteSdp == null || remoteSdp.isBlank()) {
+        Optional<String> remoteSdpOpt = Optional.ofNullable((String) session.getAttribute("sdpOffer"))
+                .filter(Predicate.not(String::isBlank))
+                .or(() -> Optional.ofNullable((String) session.getAttribute("sdpAnswer")).filter(Predicate.not(String::isBlank)));
+        if (remoteSdpOpt.isEmpty()) {
             return;
         }
 
         SdpMessage parsed;
         try {
-            parsed = SDP_PARSER.parse(remoteSdp);
+            parsed = SDP_PARSER.parse(remoteSdpOpt.get());
         } catch (IllegalArgumentException e) {
             LOG.warn("Cannot parse remote SDP for RTP probe, Call-ID: {}", callId, e);
             return;
@@ -300,37 +295,36 @@ public class CallController extends BaseSipController {
             }
         }
 
-        String localAnswer = session.getAttribute("sdpAnswer");
-        if (localAnswer != null && !localAnswer.isBlank()) {
-            try {
-                SdpMessage localParsed = SDP_PARSER.parse(localAnswer);
-                String localDir = localParsed.getDirectionAttribute();
-                SdpMessage.MediaDescription localAudio = localParsed.findFirstAudioMedia();
-                if (localAudio != null && localAudio.getAttributes() != null) {
-                    for (String a : localAudio.getAttributes()) {
-                        if (a.equalsIgnoreCase("sendrecv") || a.equalsIgnoreCase("sendonly")
-                                || a.equalsIgnoreCase("recvonly") || a.equalsIgnoreCase("inactive")) {
-                            localDir = a.toLowerCase(Locale.ROOT);
+        Optional.ofNullable((String) session.getAttribute("sdpAnswer"))
+                .filter(Predicate.not(String::isBlank))
+                .ifPresent(localAnswer -> {
+                    try {
+                        SdpMessage localParsed = SDP_PARSER.parse(localAnswer);
+                        String localDir = localParsed.getDirectionAttribute();
+                        SdpMessage.MediaDescription localAudio = localParsed.findFirstAudioMedia();
+                        if (localAudio != null && localAudio.getAttributes() != null) {
+                            for (String a : localAudio.getAttributes()) {
+                                if (a.equalsIgnoreCase("sendrecv") || a.equalsIgnoreCase("sendonly")
+                                        || a.equalsIgnoreCase("recvonly") || a.equalsIgnoreCase("inactive")) {
+                                    localDir = a.toLowerCase(Locale.ROOT);
+                                }
+                            }
                         }
-                    }
-                }
-                if (localDir != null) {
-                    String lower = localDir.trim().toLowerCase(Locale.ROOT);
-                    if (lower.equals("recvonly") || lower.equals("inactive")) {
-                        LOG.info("Call-ID {} local direction is {}, suppressing RTP probe", callId, lower);
-                        return;
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
+                        if (localDir != null) {
+                            String lower = localDir.trim().toLowerCase(Locale.ROOT);
+                            if (lower.equals("recvonly") || lower.equals("inactive")) {
+                                LOG.info("Call-ID {} local direction is {}, suppressing RTP probe", callId, lower);
+                                return;
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                });
 
         Optional<RtpCodec> codec = audio.getFormats().stream()
                 .map(this::parsePayloadType)
-                .filter(Optional::isPresent)
-                .map(Optional::get)
+                .flatMap(Optional::stream)
                 .map(RTP_CODECS::findByPayloadType)
-                .filter(Optional::isPresent)
-                .map(Optional::get)
+                .flatMap(Optional::stream)
                 .findFirst();
         if (codec.isEmpty()) {
             return;
@@ -372,24 +366,24 @@ public class CallController extends BaseSipController {
     }
 
     private Optional<Integer> parsePayloadType(String payloadType) {
-        if (payloadType == null || payloadType.isBlank()) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(Integer.parseInt(payloadType.trim()));
-        } catch (NumberFormatException e) {
-            return Optional.empty();
-        }
+        return Optional.ofNullable(payloadType)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .flatMap(pt -> {
+                    try {
+                        return Optional.of(Integer.parseInt(pt));
+                    } catch (NumberFormatException e) {
+                        return Optional.empty();
+                    }
+                });
     }
 
     private Optional<String> parseConnectionHost(String connectionLine) {
-        if (connectionLine == null || connectionLine.isBlank()) {
-            return Optional.empty();
-        }
-        String[] parts = connectionLine.trim().split("\\s+");
-        if (parts.length < 3 || parts[2].isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.of(parts[2].trim());
+        return Optional.ofNullable(connectionLine)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .map(line -> line.split("\\s+"))
+                .filter(parts -> parts.length >= 3 && !parts[2].isBlank())
+                .map(parts -> parts[2].trim());
     }
 }
