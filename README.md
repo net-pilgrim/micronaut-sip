@@ -160,6 +160,14 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - Abstract speech integration layer (`TtsClient`, `AsrClient`) with fallback synthetic tone generation (`ToneGenerator`).
     - Pluggable audio loader interface (`VxmlAudioLoader`) and output sink interface (`VxmlOutputSink`) enabling seamless integration with RTP media pipelines.
 
+18. **Behavior-Driven Development (BDD/TDD) Validation Module (`micronaut-sip-bdd`)**:
+    - Gherkin-based executable specifications running on Cucumber-JVM (`.feature` files).
+    - Virtual User Agents (`VirtualUserAgent`) with dynamic UDP Netty ports, RFC 3261 state machines (`EARLY`, `CONFIRMED`, `TERMINATED`), and CSeq transaction tracking.
+    - Race-free asynchronous `SipMailbox` with synchronized predicate awaiters and quiet-period assertions.
+    - Automatic RFC 2617 / RFC 3261 MD5 Digest Authentication calculation and challenge-response retries.
+    - SDP offer/answer inspection and audio codec negotiation assertions via `:micronaut-sdp`.
+    - Automated Mermaid sequence diagram generation embedded into test execution logs and Cucumber reports.
+
 ---
 
 ## RFC Compliance
@@ -233,6 +241,11 @@ sip.server.max-sessions=10000
 ### Build & Run All Tests
 ```bash
 ./gradlew check test
+```
+
+### Run BDD Gherkin Feature Specifications
+```bash
+./gradlew :micronaut-sip-bdd:test
 ```
 
 ### Run Consuming Application

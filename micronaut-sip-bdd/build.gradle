@@ -1,0 +1,55 @@
+plugins {
+    id("io.micronaut.library") version "5.0.2"
+    id("maven-publish")
+}
+
+version = "0.1." + (findProperty("buildNumber") ?: "3")
+group = "net.pilgrim"
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    annotationProcessor("io.micronaut:micronaut-inject-java")
+
+    api(project(":micronaut-sip"))
+    api(project(":micronaut-sdp"))
+    api(project(":micronaut-rtp"))
+    api("io.projectreactor:reactor-core")
+
+    // Cucumber-JVM
+    api("io.cucumber:cucumber-java:7.20.1")
+    api("io.cucumber:cucumber-junit-platform-engine:7.20.1")
+    api("io.cucumber:cucumber-picocontainer:7.20.1")
+    api("org.junit.platform:junit-platform-suite:1.11.3")
+
+    api("org.assertj:assertj-core:3.26.3")
+
+    compileOnly("io.micronaut:micronaut-inject-java")
+    compileOnly("io.micronaut:micronaut-management")
+
+    testImplementation("io.micronaut:micronaut-management")
+    testImplementation("io.projectreactor:reactor-test")
+    testImplementation("org.junit.jupiter:junit-jupiter-api")
+    testRuntimeOnly("ch.qos.logback:logback-classic")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+java {
+    sourceCompatibility = JavaVersion.toVersion("25")
+    targetCompatibility = JavaVersion.toVersion("25")
+}
+
+micronaut {
+    testRuntime("junit5")
+    processing {
+        incremental(true)
+        annotations("net.pilgrim.sip.bdd.*")
+    }
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    systemProperty("cucumber.junit-platform.naming-strategy", "long")
+}

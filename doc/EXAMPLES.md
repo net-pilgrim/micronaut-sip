@@ -323,3 +323,115 @@ public class CustomSecurityFilter implements SipServerFilter {
     }
 }
 ```
+
+---
+
+## Example BDD Feature Specifications (`:micronaut-sip-bdd`)
+
+The `:micronaut-sip-bdd` module enables defining call scenarios in standard Gherkin syntax that execute over real Netty sockets.
+
+### 1. Two-Party Audio Call with SDP Offer/Answer (RFC 3261)
+
+```gherkin
+Feature: Basic Audio Call Setup and Teardown (RFC 3261)
+
+  Scenario: Successful two-party call between Alice and Bob
+    Given a SIP endpoint "Alice"
+    And a SIP endpoint "Bob"
+
+    When "Alice" sends an "INVITE" to "Bob" with SDP offer:
+      | media | proto   | port | codec |
+      | audio | RTP/AVP | 4000 | PCMU  |
+
+    Then "Bob" receives an "INVITE" request within 2 seconds
+    And header "From" contains parameter "tag"
+    And header "Contact" contains parameter "sip:alice@"
+
+    When "Bob" responds with "180 Ringing"
+    Then "Alice" receives "180 Ringing" within 2 seconds
+
+    When "Bob" responds with "200 OK" with SDP answer:
+      | media | proto   | port | codec |
+      | audio | RTP/AVP | 5000 | PCMU  |
+
+    Then "Alice" receives "200 OK" within 2 seconds
+    And header "Contact" contains parameter "sip:bob@"
+    And SDP negotiated codec is "PCMU"
+    And the dialog between "Alice" and "Bob" is in state "CONFIRMED"
+
+    When "Alice" sends an ACK to "Bob"
+    Then "Bob" receives an "ACK" request within 1 second
+
+    # Teardown
+    When "Alice" sends a BYE to "Bob"
+    Then "Bob" receives a "BYE" request within 2 seconds
+
+    When "Bob" responds with "200 OK"
+    Then "Alice" receives "200 OK" within 2 seconds
+    And the dialog between "Alice" and "Bob" is in state "TERMINATED"
+```
+
+### 2. Digest Authentication Challenge & Retry (RFC 2617)
+
+```gherkin
+Feature: SIP Digest Authentication Challenge and Retry (RFC 2617)
+
+  Scenario: Registration challenged with 401 Unauthorized and retried with credentials
+    Given a SIP endpoint "Alice" with username "alice" and password "secretpass"
+    And a SIP endpoint "Registrar"
+
+    # Step 1: Initial unauthenticated REGISTER
+    When "Alice" sends an "REGISTER" to "Registrar" with headers:
+      | Header-Name | Value |
+      | Expires     | 3600  |
+
+    Then "Registrar" receives an "REGISTER" request within 2 seconds
+
+    # Step 2: Challenge issued by Registrar
+    When "Registrar" responds with "401 Unauthorized" with headers:
+      | Header-Name      | Value                                                                      |
+      | WWW-Authenticate | Digest realm="sip.domain", nonce="7d8f921e4a", qop="auth", algorithm=MD5   |
+
+    Then "Alice" receives "401 Unauthorized" within 2 seconds
+    And header "WWW-Authenticate" matches regex "Digest realm=.*, nonce=.*"
+
+    # Step 3: Alice retries with calculated MD5 digest
+    When "Alice" retries the last request with valid digest credentials
+    Then "Registrar" receives an "REGISTER" request within 2 seconds
+    And header "Authorization" matches regex "Digest username=\"alice\", realm=\"sip.domain\""
+
+    # Step 4: Registrar accepts authenticated REGISTER
+    When "Registrar" responds with "200 OK"
+    Then "Alice" receives "200 OK" within 2 seconds
+```
+
+### 3. Reliable Provisional Responses & PRACK Handshake (RFC 3262)
+
+```gherkin
+Feature: Reliable Provisional Responses and PRACK (RFC 3262)
+
+  Scenario: 183 Session Progress acknowledged via PRACK
+    Given a SIP endpoint "Alice"
+    And a SIP endpoint "Bob"
+
+    When "Alice" sends an "INVITE" to "Bob" with headers:
+      | Header-Name | Value  |
+      | Supported   | 100rel |
+
+    Then "Bob" receives an "INVITE" request within 2 seconds
+
+    When "Bob" responds with "183 Session Progress" with headers:
+      | Header-Name | Value  |
+      | Require     | 100rel |
+      | RSeq        | 1      |
+
+    Then "Alice" receives "183 Session Progress" within 2 seconds
+    And header "RSeq" equals "1"
+
+    When "Alice" sends PRACK acknowledging the provisional response to "Bob"
+    Then "Bob" receives an "PRACK" request within 2 seconds
+    And header "RAck" contains parameter "1"
+
+    When "Bob" responds with "200 OK"
+    Then "Alice" receives "200 OK" within 2 seconds
+```

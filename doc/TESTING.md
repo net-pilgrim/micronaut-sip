@@ -2,20 +2,22 @@
 
 ## Automated Test Suites & Quality Assurance Architecture
 
-The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **192 automated JVM tests** across all 5 Gradle modules, combined with external **ETSI TS 102 027-2 conformance verification** and high-throughput **SIPp benchmarks**:
+The codebase enforces a rigorous, multi-tiered testing and verification pyramid guaranteeing RFC compliance, DoS resilience, thread safety, and zero-regression reliability. The test pyramid comprises **automated JVM unit and integration tests** across all Gradle modules, high-level **BDD Gherkin executable specifications (`:micronaut-sip-bdd`)**, external **ETSI TS 102 027-2 conformance verification**, and high-throughput **SIPp benchmarks**:
 
 ```mermaid
 flowchart TD
     L4["<b>Layer 4: Performance & Load Benchmarks</b><br/>SIPp v3.7 sustained 15,000 calls @ 50 cps & 1,000 burst calls @ 200 cps<br/>+ Netem loss benchmarks (20% & 30% packet loss)"]
     L3["<b>Layer 3: Protocol Conformance Testing</b><br/>ETSI TS 102 027-2 specification suite executed via sip-tt (100% passing)"]
+    L2B["<b>Layer 2.5: BDD & Gherkin Executable Specifications</b><br/>:micronaut-sip-bdd (Cucumber-JVM: RFC 3261 basic call, RFC 2617 auth, RFC 3262 PRACK)"]
     L2["<b>Layer 2: Full-Stack Network Integration & Application Tests</b><br/>:sip-app (38 tests over Netty UDP, TCP, SDP, RTP & 100rel)<br/>:micronaut-netann (17 tests for RFC 4240 NetAnn announcement, security & RTP audio)"]
     L1["<b>Layer 1: Unit & Component Isolation Tests</b><br/>:micronaut-sip (108 tests) | :micronaut-rtp (23 tests) | :micronaut-sdp (5 tests)"]
     L4 --> L3
-    L3 --> L2
+    L3 --> L2B
+    L2B --> L2
     L2 --> L1
 ```
 
-### Test Suites Summary (192 Automated Tests)
+### Test Suites Summary
 
 | Module | Test Suite Class | Tests | Primary Focus & Target Specifications |
 | :--- | :--- | :---: | :--- |
@@ -49,6 +51,7 @@ flowchart TD
 | `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 10 | End-to-end TCP streaming call flows, RFC 3262 PRACK over TCP, TCP DTMF relay, framing reassembly, RFC 5626 keep-alive, TCP SDP/RTP integration |
 | `:micronaut-netann` | [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) | 9 | RFC 4240 NetAnn announcement service (`annc`), `play`/`repeat`/`delay`/`duration` parameters, 20ms RTP audio streaming, auto-`BYE`, error semantics (`400`, `404`, `488`), and TCP transport |
 | `:micronaut-netann` | [`AnnouncementSecurityAndNetworkingTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementSecurityAndNetworkingTest.java) | 8 | SSRF prevention (blocking private/loopback/metadata IPs), 10MB memory size caps, `repeat=forever` duration ceiling, per-IP concurrency throttling (`503`), and Contact port verification |
+| `:micronaut-sip-bdd` | [`RunCucumberTest`](../micronaut-sip-bdd/src/test/java/net/pilgrim/sip/bdd/RunCucumberTest.java) | 4 Scenarios (51 steps) | Executable RFC 3261/3262/2617 Gherkin specifications: basic audio call, digest authentication challenge, reliable provisional PRACK handshake, and call rejection |
 
 ---
 
@@ -409,3 +412,54 @@ sip-tt run \
 | `LOCAL-SDP-HOLD-IS-HONOURED` | RFC 3264 §6.1, §8.4 | **PASSED** | 3.62s | Offer of `a=sendonly` (call hold) answered with `a=recvonly` and media transmission cleanly silenced |
 
 ---
+
+## BDD / TDD Protocol Validation with Gherkin (`:micronaut-sip-bdd`)
+
+The `:micronaut-sip-bdd` module provides an automated Behavior-Driven Development framework powered by **Cucumber-JVM** and **Project Reactor**. It translates RFC ladder diagrams into human-readable, executable `.feature` files while communicating over real Netty UDP sockets.
+
+### Architecture
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Alice (Client UA)
+    actor Bob as Bob (Server UA)
+
+    Alice->>Bob: INVITE sip:bob@127.0.0.1 (SDP Offer: PCMU)
+    Bob-->>Alice: 180 Ringing
+    Bob-->>Alice: 200 OK (SDP Answer: PCMU)
+    Alice->>Bob: ACK
+    Note over Alice,Bob: Dialog state: CONFIRMED
+    Alice->>Bob: BYE
+    Bob-->>Alice: 200 OK
+    Note over Alice,Bob: Dialog state: TERMINATED
+```
+
+### Key Technical Mechanisms
+
+1. **Virtual User Agents (`VirtualUserAgent`)**:
+   - Spawns isolated endpoints (`Alice`, `Bob`, `Registrar`) on ephemeral UDP ports.
+   - Automatically maintains protocol state: increments `CSeq`, computes `Via` branch identifiers, generates `From`/`To` tags, and manages dialog transitions (`NONE` $\rightarrow$ `EARLY` $\rightarrow$ `CONFIRMED` $\rightarrow$ `TERMINATED`).
+2. **Race-Free Asynchronous Mailbox (`SipMailbox`)**:
+   - Decouples asynchronous network packet arrival from step execution.
+   - Uses synchronized `wait()` / `notifyAll()` predicate awaiters, guaranteeing that rapid packet arrivals are never missed or dropped regardless of step execution timing.
+3. **Digest Authentication Engine (`SipAuthHelper`)**:
+   - RFC 2617 / RFC 3261 MD5 digest authentication calculator.
+   - Automatically parses `WWW-Authenticate` / `Proxy-Authenticate` challenge headers and formats valid `Authorization` headers for authenticated retry steps.
+4. **Automated Visual Diagnostics**:
+   - `CallLadderRecorder` logs every packet exchange and embeds Mermaid sequence diagrams directly into test execution logs and Cucumber failure reports.
+
+### Executable Feature Specifications
+
+All 4 feature suites pass out-of-the-box (51 steps passing in ~0.6s):
+
+- **Basic Audio Call (`basic_call.feature`)**: Validates two-party call setup with SDP offer/answer negotiation, 180 Ringing, 200 OK, in-dialog ACK, codec verification (`PCMU`), and BYE teardown.
+- **Digest Authentication (`digest_auth.feature`)**: Challenges an unauthenticated `REGISTER` with `401 Unauthorized`, captures challenge parameters, and verifies successful registration upon retrying with computed digest credentials.
+- **Reliable Provisionals (`provisional_prack.feature`)**: Enforces RFC 3262 `100rel` / `RSeq` reliable delivery with `PRACK` / `RAck` acknowledgement.
+- **Call Rejection (`call_rejection.feature`)**: Validates rejection handling with `486 Busy Here` and `Retry-After: 60`.
+
+### Executing BDD Scenarios
+
+```bash
+./gradlew :micronaut-sip-bdd:test --info
+```
