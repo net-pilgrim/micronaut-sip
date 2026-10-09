@@ -1,19 +1,26 @@
 # Examples
 
-## Example SIP Controller (`CallController`)
+### Modular SIP Controllers (`sip-app`)
+
+In `sip-app`, distinct call flows are cleanly separated into dedicated, single-responsibility controllers extending [`BaseSipController`](../sip-app/src/main/java/net/pilgrim/controller/BaseSipController.java):
+
+### 1. Two-Party Conversational Setup (`CallController`)
 
 In [`sip-app/src/main/java/net/pilgrim/controller/CallController.java`](../sip-app/src/main/java/net/pilgrim/controller/CallController.java):
 
 ```java
 @SipController
-public class CallController {
+public class CallController extends BaseSipController {
 
     private static final SdpNegotiator SDP_NEGOTIATOR = new SdpNegotiator();
     private final RtpMediaManager rtpMediaManager;
 
     @Inject
-    public CallController(RtpMediaManager rtpMediaManager) {
-        this.rtpMediaManager = rtpMediaManager != null ? rtpMediaManager : new RtpMediaManager();
+    public CallController(RtpMediaManager rtpMediaManager,
+                          @Nullable SipNettyServer sipServer,
+                          @Nullable SipServerConfiguration serverConfig) {
+        super(sipServer, serverConfig);
+        this.rtpMediaManager = Optional.ofNullable(rtpMediaManager).orElseGet(RtpMediaManager::new);
     }
 
     // Handles INVITE: allocates dynamic Netty RTP port and negotiates SDP offer/answer
@@ -22,33 +29,103 @@ public class CallController {
                                       @SipCallId String callId,
                                       @SipBody String sdpOffer,
                                       SipSession session) {
-        session.setState(SipSession.State.EARLY);
+        Optional.ofNullable(session).ifPresent(s -> s.handleInvite(request, sdpOffer));
 
-        // Allocate dynamic even UDP RTP media port pair
-        int localAudioPort = 49170;
-        try {
-            RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-            localAudioPort = mediaSession.getLocalPort();
-        } catch (Exception ignored) {}
+        int localAudioPort = Optional.ofNullable(callId)
+                .flatMap(id -> {
+                    try {
+                        return Optional.of(rtpMediaManager.createSession(id).getLocalPort());
+                    } catch (Exception e) {
+                        return Optional.empty();
+                    }
+                })
+                .orElse(49170);
 
         SipResponse ringing = SipResponse.ringing(request);
-        SipResponse ok;
+        Optional.ofNullable(session).ifPresent(s -> s.handleProvisional(ringing));
 
-        if (sdpOffer != null && !sdpOffer.isBlank()) {
-            // Early offer: client offered SDP in INVITE, server returns answer in 200 OK
-            String answer = SDP_NEGOTIATOR.createAnswer(sdpOffer, localAudioPort);
-            ok = SipResponse.ok(request, answer, "application/sdp");
-        } else {
-            // Late offer: server offers SDP in 200 OK, client answers in ACK
-            String localOffer = SDP_NEGOTIATOR.createOffer(localAudioPort);
-            ok = SipResponse.ok(request, localOffer, "application/sdp");
-        }
+        String advertisedIp = resolveAdvertisedIp();
+        String contactUri = buildContactUri(request);
+
+        SipResponse ok = Optional.ofNullable(sdpOffer)
+                .filter(Predicate.not(String::isBlank))
+                .map(offer -> SipResponse.ok(request, SDP_NEGOTIATOR.createAnswer(offer, localAudioPort, advertisedIp), "application/sdp"))
+                .orElseGet(() -> SipResponse.ok(request, SDP_NEGOTIATOR.createOffer(localAudioPort, advertisedIp), "application/sdp"));
+        ok.getHeaders().setContact(contactUri);
 
         return Flux.concat(
             Mono.just(ringing),
-            Mono.just(ok).delayElement(Duration.ofMillis(50))
+            Mono.just(ok).delayElement(Duration.ofMillis(300))
         );
     }
+
+    // Handles ACK: marks dialog CONFIRMED and sends RTP probe frame
+    @OnAck
+    public void onAck(SipRequest request,
+                      @SipCallId String callId,
+                      @SipBody String ackSdpAnswer,
+                      SipSession session) {
+        Optional.ofNullable(session).ifPresent(s -> {
+            var transition = s.handleAck(request, ackSdpAnswer);
+            if (transition.isConfirmed()) {
+                maybeSendRtpProbe(callId, s);
+            }
+        });
+    }
+
+    // Handles BYE: terminates active session and releases Netty RTP port pair
+    @OnBye
+    public Mono<SipResponse> onBye(SipRequest request,
+                                   @SipCallId String callId,
+                                   SipSession session) {
+        Optional.ofNullable(session).ifPresent(s -> s.handleBye(request));
+        rtpMediaManager.terminateSession(callId);
+        return Mono.just(SipResponse.ok(request));
+    }
+
+    // Handles CANCEL: aborts in-flight call setup and tears down media session
+    @OnCancel
+    public void onCancel(SipRequest request,
+                         @SipCallId String callId,
+                         SipSession session) {
+        Optional.ofNullable(session).ifPresent(s -> s.handleCancel(request));
+        rtpMediaManager.terminateSession(callId);
+    }
+
+    // Handles PRACK (Provisional Response Acknowledgement, RFC 3262)
+    @OnPrack
+    public Mono<SipResponse> onPrack(SipRequest request,
+                                     @SipCallId String callId,
+                                     @SipHeader(value = "RAck", required = false) String rack,
+                                     @SipBody String prackBody,
+                                     SipSession session) {
+        return Optional.ofNullable(session)
+                .map(s -> s.handlePrack(request, rack, prackBody).isRejected()
+                        ? SipResponse.transactionDoesNotExist(request)
+                        : SipResponse.ok(request))
+                .map(Mono::just)
+                .orElseGet(() -> Mono.just(SipResponse.transactionDoesNotExist(request)));
+    }
+
+    // Handles OPTIONS capability discovery
+    @OnOptions
+    public SipResponse onOptions(SipRequest request) {
+        SipResponse response = SipResponse.ok(request);
+        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO, PRACK");
+        response.getHeaders().set(SipHeaders.SUPPORTED, "replaces, 100rel");
+        response.getHeaders().set(SipHeaders.RECV_INFO, "dtmf");
+        return response;
+    }
+}
+```
+
+### 2. Early-Media & In-Band Ringback Controller (`EarlyMediaController`)
+
+In [`sip-app/src/main/java/net/pilgrim/controller/EarlyMediaController.java`](../sip-app/src/main/java/net/pilgrim/controller/EarlyMediaController.java):
+
+```java
+@SipController
+public class EarlyMediaController extends BaseSipController {
 
     // Handles Early Media: emits 183 Session Progress with SDP, streams ringback tone, then 200 OK
     @OnInvite("early-media")
@@ -57,7 +134,7 @@ public class CallController {
                                                 @SipBody String sdpOffer,
                                                 SipSession session) {
         RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
-        String sdpAnswer = SDP_NEGOTIATOR.createAnswer(sdpOffer, mediaSession.getLocalPort());
+        String sdpAnswer = SDP_NEGOTIATOR.createAnswer(sdpOffer, mediaSession.getLocalPort(), resolveAdvertisedIp());
 
         SipResponse sessionProgress = SipResponse.sessionProgress(request);
         sessionProgress.getHeaders().setContentType("application/sdp");
@@ -73,82 +150,58 @@ public class CallController {
             Mono.just(ok).delayElement(Duration.ofMillis(800))
         );
     }
+}
+```
 
-    // Handles ACK: marks dialog CONFIRMED and latches remote RTP destination
-    @OnAck
-    public void onAck(SipRequest request,
-                      @SipCallId String callId,
-                      @SipBody String ackSdpAnswer,
-                      SipSession session) {
-        if (session != null && session.getState() != SipSession.State.TERMINATED) {
-            session.setState(SipSession.State.CONFIRMED);
-        }
-    }
+### 3. Registration Controller (`RegistrationController`)
 
-    // Handles BYE: terminates active session and releases Netty RTP port pair
-    @OnBye
-    public Mono<SipResponse> onBye(SipRequest request,
-                                   @SipCallId String callId,
-                                   SipSession session) {
-        session.setState(SipSession.State.TERMINATED);
-        rtpMediaManager.terminateSession(callId);
-        return Mono.just(SipResponse.ok(request));
-    }
+In [`sip-app/src/main/java/net/pilgrim/controller/RegistrationController.java`](../sip-app/src/main/java/net/pilgrim/controller/RegistrationController.java):
 
-    // Handles CANCEL: aborts in-flight call setup and tears down media session
-    @OnCancel
-    public void onCancel(SipRequest request,
-                         @SipCallId String callId,
-                         SipSession session) {
-        if (session != null) session.setState(SipSession.State.TERMINATED);
-        rtpMediaManager.terminateSession(callId);
-    }
+```java
+@SipController
+public class RegistrationController extends BaseSipController {
 
-    // Handles REGISTER with URI injection and request-URI parameter binding
+    // Handles REGISTER with URI injection and parameter binding
     @OnRegister
     public SipResponse onRegister(SipRequest request,
                                   @SipTo SipUri toUri,
                                   @SipParam(value = "transport", defaultValue = "udp") String transport,
                                   @SipHeader(value = "Contact", required = false) String contact) {
         SipResponse response = SipResponse.ok(request);
-        if (contact != null) response.getHeaders().setContact(contact);
-        response.getHeaders().set("X-Registered-User", toUri.getUser());
+        Optional.ofNullable(contact).ifPresent(response.getHeaders()::setContact);
+        Optional.ofNullable(toUri)
+                .map(SipUri::getUser)
+                .filter(Predicate.not(String::isBlank))
+                .ifPresent(u -> response.getHeaders().set("X-Registered-User", u));
         response.getHeaders().set("X-Transport-Param", transport);
         response.getHeaders().set(SipHeaders.EXPIRES, "3600");
         return response;
     }
+}
+```
 
-    // Handles OPTIONS capability discovery
-    @OnOptions
-    public SipResponse onOptions(SipRequest request) {
-        SipResponse response = SipResponse.ok(request);
-        response.getHeaders().set(SipHeaders.ALLOW, "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, MESSAGE, INFO, PRACK, SUBSCRIBE, NOTIFY, REFER, UPDATE, PUBLISH");
-        return response;
-    }
+### 4. Messaging & DTMF Relay Controller (`DtmfController`)
 
-    // Handles PRACK (Provisional Response Acknowledgement, RFC 3262)
-    @OnPrack
-    public Mono<SipResponse> onPrack(SipRequest request,
-                                     @SipCallId String callId,
-                                     @SipHeader(value = SipHeaders.RACK, required = false) String rack,
-                                     SipSession session) {
-        LOG.info("Received PRACK for Call-ID: {} with RAck: {}", callId, rack);
-        if (session == null || session.getState() == SipSession.State.TERMINATED) {
-            return Mono.just(SipResponse.transactionDoesNotExist(request));
-        }
-        return Mono.just(SipResponse.ok(request));
-    }
+In [`sip-app/src/main/java/net/pilgrim/controller/DtmfController.java`](../sip-app/src/main/java/net/pilgrim/controller/DtmfController.java):
 
-    // Handles instant MESSAGE (RFC 3428) with @SipFrom and @SipDtmf injection
+```java
+@SipController
+public class DtmfController extends BaseSipController {
+
+    // Handles instant MESSAGE (RFC 3428)
     @OnMessage
     public Mono<SipResponse> onMessage(SipRequest request,
                                        @SipFrom String from,
                                        @SipBody String messageBody,
-                                       @SipDtmf DtmfSignal dtmf) {
-        if (dtmf != null) {
-            LOG.info("Received DTMF via MESSAGE from {}: digit='{}'", from, dtmf.getDigit());
-        }
-        return Mono.just(SipResponse.ok(request));
+                                       @SipDtmf DtmfSignal dtmf,
+                                       SipSession session) {
+        return Optional.ofNullable(dtmf)
+                .map(signal -> {
+                    SipResponse ok = SipResponse.ok(request);
+                    ok.getHeaders().set("X-Received-DTMF", String.valueOf(signal.getDigit()));
+                    return Mono.just(ok);
+                })
+                .orElseGet(() -> Mono.just(SipResponse.ok(request)));
     }
 
     // Handles mid-dialog INFO (RFC 2976 / RFC 6086) DTMF relay signaling
@@ -158,18 +211,14 @@ public class CallController {
                                     @SipFrom String from,
                                     @SipDtmf DtmfSignal dtmf,
                                     SipSession session) {
-        if (dtmf != null) {
-            LOG.info("Received DTMF tone '{}' (duration: {}ms) for call {}",
-                    dtmf.getDigit(), dtmf.getDuration(), callId);
-            if (session != null) {
-                String existing = session.getAttribute("dtmfDigits");
-                session.setAttribute("dtmfDigits", (existing != null ? existing : "") + dtmf.getDigit());
-            }
-            SipResponse ok = SipResponse.ok(request);
-            ok.getHeaders().set("X-Received-DTMF", String.valueOf(dtmf.getDigit()));
-            return Mono.just(ok);
-        }
-        return Mono.just(SipResponse.ok(request));
+        return Optional.ofNullable(dtmf)
+                .map(signal -> {
+                    Optional.ofNullable(session).ifPresent(s -> recordDtmfInSession(s, signal));
+                    SipResponse ok = SipResponse.ok(request);
+                    ok.getHeaders().set("X-Received-DTMF", String.valueOf(signal.getDigit()));
+                    return Mono.just(ok);
+                })
+                .orElseGet(() -> Mono.just(SipResponse.ok(request)));
     }
 }
 ```

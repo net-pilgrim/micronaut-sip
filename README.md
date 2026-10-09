@@ -168,6 +168,19 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
     - SDP offer/answer inspection and audio codec negotiation assertions via `:micronaut-sdp`.
     - Automated Mermaid sequence diagram generation embedded into test execution logs and Cucumber reports.
 
+19. **Modular Consuming Application Module (`sip-app`)**:
+    - Complete standalone SIP server application demonstrating modular `@SipController` architecture:
+      - [`CallController`](sip-app/src/main/java/net/pilgrim/controller/CallController.java): Two-party conversational setup, confirmation, teardown, cancellation, reliable PRACK, and capability discovery.
+      - [`EarlyMediaController`](sip-app/src/main/java/net/pilgrim/controller/EarlyMediaController.java): RFC 3960 early-media ringback audio streaming during provisional 183 Session Progress.
+      - [`SlowCallController`](sip-app/src/main/java/net/pilgrim/controller/SlowCallController.java): High-latency callee scenarios verifying non-blocking auto 100 Trying emission.
+      - [`RegistrationController`](sip-app/src/main/java/net/pilgrim/controller/RegistrationController.java): RFC 3261 Section 10 SIP endpoint registrations.
+      - [`DtmfController`](sip-app/src/main/java/net/pilgrim/controller/DtmfController.java): RFC 3428 instant MESSAGE and RFC 2976 / RFC 6086 INFO DTMF relay signaling.
+      - [`BaseSipController`](sip-app/src/main/java/net/pilgrim/controller/BaseSipController.java): Shared base class managing transport, advertised IP, and Contact URI construction.
+
+20. **SIP Mailbox & Answering Machine Module (`sip-mailbox`)**:
+    - Complete answering machine and voicemail service (`sip:mailbox@...` and `sip:<owner>+mailbox@...`).
+    - Driven by VoiceXML dialogs, recording caller voicemail audio into object storage, and handling DTMF control.
+
 ---
 
 ## RFC Compliance
