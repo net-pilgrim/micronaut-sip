@@ -903,4 +903,90 @@ class SipIntegrationTest {
         assertFalse(contact.contains(":49999"),
                 "Contact header must not use caller's ephemeral port 49999: " + contact);
     }
+
+    @Test
+    void testEarlyMediaStreamedDuringProvisionalState() throws Exception {
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
+        String callId = "early-media-test-" + UUID.randomUUID();
+
+        try (DatagramSocket rtpReceiver = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
+            rtpReceiver.setSoTimeout(3000);
+            String sdpOffer = """
+                    v=0
+                    o=Alice 1099 1099 IN IP4 127.0.0.1
+                    s=Offer
+                    c=IN IP4 127.0.0.1
+                    t=0 0
+                    m=audio %d RTP/AVP 0
+                    """.formatted(rtpReceiver.getLocalPort()).replace("\n", "\r\n");
+
+            SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:early-media@127.0.0.1:" + server.getPort())
+                    .from("<sip:alice@127.0.0.1>;tag=" + UUID.randomUUID().toString().substring(0, 8))
+                    .to("<sip:early-media@127.0.0.1>")
+                    .callId(callId)
+                    .contentType("application/sdp")
+                    .header("X-Early-Media-Duration", "600")
+                    .body(sdpOffer)
+                    .build();
+
+            List<SipResponse> responses = new java.util.concurrent.CopyOnWriteArrayList<>();
+            CountDownLatch progressLatch = new CountDownLatch(1);
+            CountDownLatch okLatch = new CountDownLatch(1);
+
+            client.sendWithProvisional(invite, serverAddress).subscribe(resp -> {
+                responses.add(resp);
+                if (resp.getStatusCode() == 183) {
+                    progressLatch.countDown();
+                } else if (resp.getStatusCode() == 200) {
+                    okLatch.countDown();
+                }
+            });
+
+            // 1. Verify 183 Session Progress arrives first with SDP answer
+            assertTrue(progressLatch.await(3, TimeUnit.SECONDS), "Expected 183 Session Progress");
+            SipResponse sessionProgress = responses.get(0);
+            assertEquals(183, sessionProgress.getStatusCode());
+            assertEquals("Session Progress", sessionProgress.getReasonPhrase());
+            assertEquals("application/sdp", sessionProgress.getContentType());
+            assertNotNull(sessionProgress.getBodyAsString());
+            assertTrue(sessionProgress.getTo().contains("tag="), "183 must contain early dialog To tag");
+
+            // Verify dialog session is in EARLY state
+            Optional<SipSession> sessionOpt = sessionManager.findSession(callId);
+            assertTrue(sessionOpt.isPresent());
+            assertEquals(SipSession.State.EARLY, sessionOpt.get().getState());
+
+            // 2. Verify early media RTP packet received while in EARLY state (before 200 OK arrives)
+            byte[] buf = new byte[1500];
+            DatagramPacket packet = new DatagramPacket(buf, buf.length);
+            rtpReceiver.receive(packet);
+
+            byte[] raw = new byte[packet.getLength()];
+            System.arraycopy(packet.getData(), packet.getOffset(), raw, 0, packet.getLength());
+            net.pilgrim.sip.rtp.RtpPacket rtpPacket = net.pilgrim.sip.rtp.RtpPacket.parse(raw);
+            assertEquals(0, rtpPacket.getPayloadType(), "Expected G.711 PCMU early ringback payload");
+            assertEquals(160, rtpPacket.getPayload().length, "Expected 20ms G.711 frame");
+
+            // 3. Verify 200 OK arrives after early media playback delay
+            assertTrue(okLatch.await(3, TimeUnit.SECONDS), "Expected 200 OK after early media duration");
+            assertEquals(2, responses.size());
+            SipResponse ok = responses.get(1);
+            assertEquals(200, ok.getStatusCode());
+            assertEquals(sessionProgress.getTo(), ok.getTo(), "200 OK To tag must match early dialog To tag");
+
+            // 4. Send ACK to confirm dialog
+            client.sendAck(invite, ok, serverAddress).block(Duration.ofSeconds(2));
+            long deadline = System.currentTimeMillis() + 2000;
+            while (sessionOpt.get().getState() != SipSession.State.CONFIRMED && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            assertEquals(SipSession.State.CONFIRMED, sessionOpt.get().getState());
+
+            // 5. Teardown via BYE
+            SipResponse bye = client.sendBye(invite, ok, serverAddress).block(Duration.ofSeconds(3));
+            assertNotNull(bye);
+            assertEquals(200, bye.getStatusCode());
+            assertEquals(SipSession.State.TERMINATED, sessionOpt.get().getState());
+        }
+    }
 }

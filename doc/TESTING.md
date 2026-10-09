@@ -47,11 +47,11 @@ flowchart TD
 | `:micronaut-rtp` | [`RtpStreamingTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/RtpStreamingTest.java) | 3 | RFC 3550 packet serialization, header flag parsing, and offline sender/receiver streaming |
 | `:micronaut-rtp` | [`RtpMediaManagerTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpMediaManagerTest.java) | 3 | Concurrent media session allocation, dedicated Netty event loop group isolation, and lifecycle teardown |
 | `:micronaut-rtp` | [`RtpAudioHookTest`](../micronaut-rtp/src/test/java/net/pilgrim/sip/rtp/media/RtpAudioHookTest.java) | 6 | Inbound/outbound audio processing hooks, Goertzel dual-tone multifrequency detector, voice activity detection, and reactive PCM frame streaming |
-| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 25 | Live UDP network call flows, RFC 3262 100rel PRACK flow, mid-dialog INFO DTMF relay, late/early-offer SDP, dynamic RTP probe, netem packet drop resilience |
+| `:sip-app` | [`SipIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipIntegrationTest.java) | 26 | Live UDP network call flows, RFC 3960 early-media in-band ringback, RFC 3262 100rel PRACK flow, mid-dialog INFO DTMF relay, late/early-offer SDP, dynamic RTP probe, netem packet drop resilience |
 | `:sip-app` | [`SipTcpIntegrationTest`](../sip-app/src/test/java/net/pilgrim/sip/SipTcpIntegrationTest.java) | 10 | End-to-end TCP streaming call flows, RFC 3262 PRACK over TCP, TCP DTMF relay, framing reassembly, RFC 5626 keep-alive, TCP SDP/RTP integration |
 | `:micronaut-netann` | [`AnnouncementIntegrationTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementIntegrationTest.java) | 9 | RFC 4240 NetAnn announcement service (`annc`), `play`/`repeat`/`delay`/`duration` parameters, 20ms RTP audio streaming, auto-`BYE`, error semantics (`400`, `404`, `488`), and TCP transport |
 | `:micronaut-netann` | [`AnnouncementSecurityAndNetworkingTest`](../micronaut-netann/src/test/java/net/pilgrim/netann/AnnouncementSecurityAndNetworkingTest.java) | 8 | SSRF prevention (blocking private/loopback/metadata IPs), 10MB memory size caps, `repeat=forever` duration ceiling, per-IP concurrency throttling (`503`), and Contact port verification |
-| `:micronaut-sip-bdd` | [`RunCucumberTest`](../micronaut-sip-bdd/src/test/java/net/pilgrim/sip/bdd/RunCucumberTest.java) | 4 Scenarios (51 steps) | Executable RFC 3261/3262/2617 Gherkin specifications: basic audio call, digest authentication challenge, reliable provisional PRACK handshake, and call rejection |
+| `:micronaut-sip-bdd` | [`RunCucumberTest`](../micronaut-sip-bdd/src/test/java/net/pilgrim/sip/bdd/RunCucumberTest.java) | 5 Scenarios (70 steps) | Executable RFC 3261/3262/3960/2617 Gherkin specifications: basic audio call, early media session progress, digest authentication challenge, reliable provisional PRACK handshake, and call rejection |
 
 ---
 
@@ -451,9 +451,10 @@ sequenceDiagram
 
 ### Executable Feature Specifications
 
-All 4 feature suites pass out-of-the-box (51 steps passing in ~0.6s):
+All 5 feature suites pass out-of-the-box (70 steps passing in ~0.7s):
 
 - **Basic Audio Call (`basic_call.feature`)**: Validates two-party call setup with SDP offer/answer negotiation, 180 Ringing, 200 OK, in-dialog ACK, codec verification (`PCMU`), and BYE teardown.
+- **Early Media & Session Progress (`early_media.feature`)**: Validates RFC 3960 early-dialog media negotiation with 183 Session Progress containing SDP answer, early dialog state (`EARLY`), transitioning to `CONFIRMED` upon 200 OK and ACK.
 - **Digest Authentication (`digest_auth.feature`)**: Challenges an unauthenticated `REGISTER` with `401 Unauthorized`, captures challenge parameters, and verifies successful registration upon retrying with computed digest credentials.
 - **Reliable Provisionals (`provisional_prack.feature`)**: Enforces RFC 3262 `100rel` / `RSeq` reliable delivery with `PRACK` / `RAck` acknowledgement.
 - **Call Rejection (`call_rejection.feature`)**: Validates rejection handling with `486 Busy Here` and `Retry-After: 60`.

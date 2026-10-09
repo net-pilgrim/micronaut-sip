@@ -50,6 +50,30 @@ public class CallController {
         );
     }
 
+    // Handles Early Media: emits 183 Session Progress with SDP, streams ringback tone, then 200 OK
+    @OnInvite("early-media")
+    public Flux<SipResponse> onEarlyMediaInvite(SipRequest request,
+                                                @SipCallId String callId,
+                                                @SipBody String sdpOffer,
+                                                SipSession session) {
+        RtpMediaSession mediaSession = rtpMediaManager.createSession(callId);
+        String sdpAnswer = SDP_NEGOTIATOR.createAnswer(sdpOffer, mediaSession.getLocalPort());
+
+        SipResponse sessionProgress = SipResponse.sessionProgress(request);
+        sessionProgress.getHeaders().setContentType("application/sdp");
+        sessionProgress.setBody(sdpAnswer);
+
+        // Stream 20ms G.711 ringback tone packets over RTP during early dialog state
+        byte[] ringbackPcm = generateRingbackTone(800);
+        mediaSession.playAudio(ringbackPcm, null);
+
+        SipResponse ok = SipResponse.ok(request, sdpAnswer, "application/sdp");
+        return Flux.concat(
+            Mono.just(sessionProgress),
+            Mono.just(ok).delayElement(Duration.ofMillis(800))
+        );
+    }
+
     // Handles ACK: marks dialog CONFIRMED and latches remote RTP destination
     @OnAck
     public void onAck(SipRequest request,
@@ -434,4 +458,68 @@ Feature: Reliable Provisional Responses and PRACK (RFC 3262)
 
     When "Bob" responds with "200 OK"
     Then "Alice" receives "200 OK" within 2 seconds
+```
+
+### 4. Early Media & In-Band Ringback (RFC 3960 / RFC 3261)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Caller as SIP Caller
+    participant Server as Micronaut SIP Server
+
+    Caller->>Server: INVITE sip:early-media@... (SDP Offer)
+    Server-->>Caller: 183 Session Progress (SDP Answer in provisional response)
+    Note over Caller,Server: Early Dialog Established (State: EARLY)
+    
+    loop During Ringback Phase
+        Server->>Caller: 20ms G.711 RTP Audio Stream (In-Band Ringback Tone 440+480Hz)
+    end
+    
+    Server-->>Caller: 200 OK (Call Answered)
+    Caller->>Server: ACK
+    Note over Caller,Server: Dialog Confirmed (State: CONFIRMED)
+    
+    Caller->>Server: BYE
+    Server-->>Caller: 200 OK
+    Note over Caller,Server: Dialog Terminated (State: TERMINATED)
+```
+
+```gherkin
+Feature: Early Media and Session Progress (RFC 3960 / RFC 3261)
+
+  Scenario: Early media negotiated via 183 Session Progress with SDP
+    Given a SIP endpoint "Alice"
+    And a SIP endpoint "Bob"
+
+    When "Alice" sends an "INVITE" to "Bob" with SDP offer:
+      | media | proto   | port | codec |
+      | audio | RTP/AVP | 4000 | PCMU  |
+
+    Then "Bob" receives an "INVITE" request within 2 seconds
+    And header "From" contains parameter "tag"
+    And the dialog between "Alice" and "Bob" is in state "EARLY"
+
+    When "Bob" responds with "183 Session Progress" with SDP answer:
+      | media | proto   | port | codec |
+      | audio | RTP/AVP | 5000 | PCMU  |
+
+    Then "Alice" receives "183 Session Progress" within 2 seconds
+    And header "Content-Type" equals "application/sdp"
+    And SDP negotiated codec is "PCMU"
+    And the dialog between "Alice" and "Bob" is in state "EARLY"
+
+    When "Bob" responds with "200 OK"
+    Then "Alice" receives "200 OK" within 2 seconds
+    And the dialog between "Alice" and "Bob" is in state "CONFIRMED"
+
+    When "Alice" sends an ACK to "Bob"
+    Then "Bob" receives an "ACK" request within 1 second
+
+    # Teardown
+    When "Alice" sends a BYE to "Bob"
+    Then "Bob" receives a "BYE" request within 2 seconds
+    When "Bob" responds with "200 OK"
+    Then "Alice" receives "200 OK" within 2 seconds
+    And the dialog between "Alice" and "Bob" is in state "TERMINATED"
 ```
