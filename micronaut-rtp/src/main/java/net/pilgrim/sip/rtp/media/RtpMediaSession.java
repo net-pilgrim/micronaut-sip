@@ -170,7 +170,12 @@ public final class RtpMediaSession implements Closeable {
     public void onInboundPacket(RtpInboundPacket inbound) {
         packetsReceived.increment();
         bytesReceived.add(inbound.packet().getPayload().length + 12);
-        if (remoteAddress == null) {
+        // Symmetric RTP latching (RFC 4961): latch remoteAddress to actual source of inbound RTP packets
+        if (remoteAddress == null || !remoteAddress.equals(inbound.senderAddress())) {
+            if (remoteAddress != null) {
+                LOG.info("Symmetric RTP latching (RFC 4961): updated remote RTP destination for Call-ID {} from {} to {}",
+                        callId, remoteAddress, inbound.senderAddress());
+            }
             this.remoteAddress = inbound.senderAddress();
         }
 

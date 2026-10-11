@@ -192,4 +192,26 @@ public abstract class SipMessage {
     public boolean isResponse() {
         return !isRequest();
     }
+
+    protected final java.util.concurrent.ConcurrentMap<String, Object> attributes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public SipMessage setAttribute(String name, Object value) {
+        if (name != null) {
+            if (value != null) {
+                attributes.put(name, value);
+            } else {
+                attributes.remove(name);
+            }
+        }
+        return this;
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> T getAttribute(String name) {
+        return (T) attributes.get(name);
+    }
+
+    public java.util.Map<String, Object> getAttributes() {
+        return java.util.Collections.unmodifiableMap(attributes);
+    }
 }

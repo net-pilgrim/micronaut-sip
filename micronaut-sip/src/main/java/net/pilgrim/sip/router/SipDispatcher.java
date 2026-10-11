@@ -385,7 +385,7 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
             }
         }
         routes.add(newRoute);
-        routes.sort((r1, r2) -> Integer.compare(r2.getUriPattern().length(), r1.getUriPattern().length()));
+        routes.sort(null);
     }
 
     private String combinePattern(String prefix, String value) {
@@ -840,6 +840,25 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
                 if (route.matches(request)) {
                     matchedRoute = route;
                     break;
+                }
+            }
+
+            // If an in-dialog request matched a catch-all route (empty uriPattern),
+            // but belongs to an active dialog with a specific original INVITE target,
+            // prefer the route matching the session's dialog.
+            if ((matchedRoute == null || matchedRoute.getUriPattern().isEmpty()) && request.getMethod() != SipMethod.INVITE) {
+                SipSession session = sessionManager.getSession(request.getCallId());
+                if (session != null) {
+                    Object origInviteObj = session.getAttribute("originalInvite");
+                    if (origInviteObj instanceof SipRequest origInvite) {
+                        for (SipRoute route : routes) {
+                            if (route.getMethod() == request.getMethod() && !route.getUriPattern().isEmpty()
+                                    && route.matchesUri(origInvite)) {
+                                matchedRoute = route;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
 

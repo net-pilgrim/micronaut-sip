@@ -321,15 +321,7 @@ public class VxmlParser {
                     if (state == 0) {
                         thenExecutables.add(exec);
                     } else if (state == 1 && currentElseIf != null) {
-                        currentElseIf.getExecutables();
-                        // Add to current elseIf (which has internal list)
-                        try {
-                            java.lang.reflect.Field f = VxmlElseIf.class.getDeclaredField("executables");
-                            f.setAccessible(true);
-                            @SuppressWarnings("unchecked")
-                            List<VxmlExecutable> list = (List<VxmlExecutable>) f.get(currentElseIf);
-                            list.add(exec);
-                        } catch (Exception ignored) {}
+                        currentElseIf.addExecutable(exec);
                     } else if (state == 2) {
                         elseExecutables.add(exec);
                     }

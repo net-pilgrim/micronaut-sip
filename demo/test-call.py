@@ -77,12 +77,19 @@ def run_test_call_tcp(target_user="annc", query_params=";play=builtin:tone:440,1
             print("------------------------------------------------------------------")
             print(message)
 
+            contact_uri = request_uri
             lines = message.split("\r\n")
             for line in lines:
                 if line.lower().startswith("to:"):
                     to_header = line.split(":", 1)[1].strip()
                 elif line.lower().startswith("record-route:"):
                     record_routes.append(line.split(":", 1)[1].strip())
+                elif line.lower().startswith("contact:"):
+                    raw_contact = line.split(":", 1)[1].strip()
+                    if "<" in raw_contact and ">" in raw_contact:
+                        contact_uri = raw_contact.split("<")[1].split(">")[0]
+                    else:
+                        contact_uri = raw_contact.split(";")[0]
 
             if "200 OK" in message:
                 print("\n[+] Received 200 OK! Sending ACK back through Proxy...")
@@ -92,7 +99,7 @@ def run_test_call_tcp(target_user="annc", query_params=";play=builtin:tone:440,1
                     route_header = f"Route: {record_routes[0]}\r\n"
 
                 ack = (
-                    f"ACK {request_uri} SIP/2.0\r\n"
+                    f"ACK {contact_uri} SIP/2.0\r\n"
                     f"Via: SIP/2.0/TCP 127.0.0.1:{LOCAL_PORT};branch={ack_branch};rport\r\n"
                     f"Max-Forwards: 70\r\n"
                     f"{route_header}"
@@ -171,11 +178,18 @@ def run_test_call_udp(target_user="annc", query_params=";play=builtin:tone:440,1
             lines = message.split("\r\n")
             status_line = lines[0]
 
+            contact_uri = request_uri
             for line in lines:
                 if line.lower().startswith("to:"):
                     to_header = line.split(":", 1)[1].strip()
                 elif line.lower().startswith("record-route:"):
                     record_routes.append(line.split(":", 1)[1].strip())
+                elif line.lower().startswith("contact:"):
+                    raw_contact = line.split(":", 1)[1].strip()
+                    if "<" in raw_contact and ">" in raw_contact:
+                        contact_uri = raw_contact.split("<")[1].split(">")[0]
+                    else:
+                        contact_uri = raw_contact.split(";")[0]
 
             if "200 OK" in status_line:
                 print("\n[+] Received 200 OK! Sending ACK back through Proxy...")
@@ -185,7 +199,7 @@ def run_test_call_udp(target_user="annc", query_params=";play=builtin:tone:440,1
                     route_header = f"Route: {record_routes[0]}\r\n"
 
                 ack = (
-                    f"ACK {request_uri} SIP/2.0\r\n"
+                    f"ACK {contact_uri} SIP/2.0\r\n"
                     f"Via: SIP/2.0/UDP 127.0.0.1:{LOCAL_PORT};branch={ack_branch};rport\r\n"
                     f"Max-Forwards: 70\r\n"
                     f"{route_header}"

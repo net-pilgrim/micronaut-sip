@@ -27,6 +27,7 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"                     # HTTP Management & /health endpoint
+      - "1554:1554"                     # MRCPv2 TCP Control Channel
       - "40000-40050:40000-40050/udp"   # Dynamic RTP audio media streaming ports
     environment:
       - SIP_SERVER_UDP_HOST=0.0.0.0
@@ -34,8 +35,14 @@ services:
       - SIP_SERVER_TCP_HOST=0.0.0.0
       - SIP_SERVER_TCP_PORT=5060
       - SIP_SERVER_ADVERTISED_IP=127.0.0.1
+      - MRCP_SERVER_PORT=1554
+      - MRCP_SERVER_ENABLED=true
       - RTP_PORT_RANGE_START=40000
       - RTP_PORT_RANGE_END=40050
+      - SIP_RTP_PORT_RANGE_START=40000
+      - SIP_RTP_PORT_RANGE_END=40050
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - MISTRAL_AUDIO_API_KEY=${MISTRAL_AUDIO_API_KEY:-}
       - LOG_LEVEL=INFO
     networks:
       sip-net:

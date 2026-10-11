@@ -17,13 +17,14 @@ import java.net.InetSocketAddress;
 /**
  * Encapsulates a route mapping a SIP Method and URI pattern to an ExecutableMethod handler.
  */
-public class SipRoute {
+public class SipRoute implements Comparable<SipRoute> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SipRoute.class);
 
     private final SipMethod method;
     private final String customMethod;
     private final String uriPattern;
+    private final SipPatternMatcher patternMatcher;
     private final Object controllerInstance;
     private final ExecutableMethod<Object, ?> executableMethod;
     private final Argument<?>[] arguments;
@@ -33,6 +34,7 @@ public class SipRoute {
         this.method = method;
         this.customMethod = customMethod;
         this.uriPattern = uriPattern != null ? uriPattern.trim() : "";
+        this.patternMatcher = new SipPatternMatcher(this.uriPattern);
         this.controllerInstance = controllerInstance;
         this.executableMethod = executableMethod;
         this.arguments = executableMethod != null ? executableMethod.getArguments() : Argument.ZERO_ARGUMENTS;
@@ -43,6 +45,7 @@ public class SipRoute {
         this.method = method;
         this.customMethod = customMethod;
         this.uriPattern = uriPattern != null ? uriPattern.trim() : "";
+        this.patternMatcher = new SipPatternMatcher(this.uriPattern);
         this.controllerInstance = controllerInstance;
         this.executableMethod = null;
         this.arguments = Argument.ZERO_ARGUMENTS;
@@ -63,20 +66,18 @@ public class SipRoute {
             }
         }
 
-        if (!uriPattern.isEmpty()) {
-            String uriStr = request.getUri() != null ? request.getUri().toString().toLowerCase(java.util.Locale.ROOT) : "";
-            String userStr = (request.getUri() != null && request.getUri().getUser() != null) ? request.getUri().getUser().toLowerCase(java.util.Locale.ROOT) : "";
-            String pattern = uriPattern.toLowerCase(java.util.Locale.ROOT);
-            // Check if matches either entire URI or user prefix
-            if (!uriStr.contains(pattern) && !userStr.startsWith(pattern)) {
-                return false;
-            }
+        java.util.Optional<java.util.Map<String, String>> matchedVars = patternMatcher.match(request);
+        if (matchedVars.isPresent()) {
+            request.setAttribute("sip.route.variables", matchedVars.get());
+            return true;
         }
 
-        return true;
+        return false;
     }
 
     public Object invoke(SipRequest request, SipSessionManager sessionManager) throws Exception {
+        java.util.Map<String, String> routeVars = request.getAttribute("sip.route.variables");
+
         if (executableMethod != null) {
             Object[] args = new Object[arguments.length];
             for (int i = 0; i < arguments.length; i++) {
@@ -119,6 +120,24 @@ public class SipRoute {
                         throw new IllegalArgumentException("Missing required SIP URI parameter: " + paramName);
                     }
                     args[i] = convertValue(paramVal, paramType);
+                } else if (arg.isAnnotationPresent(SipVar.class)) {
+                    AnnotationValue<SipVar> varAnn = arg.getAnnotation(SipVar.class);
+                    String varName = varAnn != null ? varAnn.stringValue().orElse("") : "";
+                    if (varName.isEmpty()) {
+                        varName = arg.getName();
+                    }
+                    String val = (routeVars != null) ? routeVars.get(varName) : null;
+                    if (val == null && varAnn != null) {
+                        String def = varAnn.stringValue("defaultValue").orElse("");
+                        if (!def.isEmpty()) {
+                            val = def;
+                        }
+                    }
+                    boolean required = varAnn == null || varAnn.booleanValue("required").orElse(true);
+                    if (val == null && required) {
+                        throw new IllegalArgumentException("Missing required SIP path/regex variable: " + varName);
+                    }
+                    args[i] = convertValue(val, paramType);
                 } else if (SipUri.class.isAssignableFrom(paramType)) {
                     args[i] = request.getUri();
                 } else if (ViaHeader.class.isAssignableFrom(paramType)) {
@@ -229,6 +248,18 @@ public class SipRoute {
                         throw new IllegalArgumentException("Missing required SIP URI parameter: " + paramName);
                     }
                     args[i] = convertValue(paramVal, paramType);
+                } else if (param.isAnnotationPresent(SipVar.class)) {
+                    SipVar varAnn = param.getAnnotation(SipVar.class);
+                    String varName = (varAnn != null && !varAnn.value().isEmpty()) ? varAnn.value() : param.getName();
+                    String val = (routeVars != null) ? routeVars.get(varName) : null;
+                    if (val == null && varAnn != null && !varAnn.defaultValue().isEmpty()) {
+                        val = varAnn.defaultValue();
+                    }
+                    boolean required = varAnn == null || varAnn.required();
+                    if (val == null && required) {
+                        throw new IllegalArgumentException("Missing required SIP path/regex variable: " + varName);
+                    }
+                    args[i] = convertValue(val, paramType);
                 } else if (SipUri.class.isAssignableFrom(paramType)) {
                     args[i] = request.getUri();
                 } else if (ViaHeader.class.isAssignableFrom(paramType)) {
@@ -311,9 +342,7 @@ public class SipRoute {
 
     public boolean matchesUri(SipRequest request) {
         if (!uriPattern.isEmpty()) {
-            String uriStr = request.getUri() != null ? request.getUri().toString() : "";
-            String userStr = (request.getUri() != null && request.getUri().getUser() != null) ? request.getUri().getUser() : "";
-            return uriStr.contains(uriPattern) || userStr.startsWith(uriPattern);
+            return patternMatcher.match(request).isPresent();
         }
         return true;
     }
@@ -357,5 +386,15 @@ public class SipRoute {
             return Double.parseDouble(val.trim());
         }
         return val;
+    }
+
+    public SipPatternMatcher getPatternMatcher() {
+        return patternMatcher;
+    }
+
+    @Override
+    public int compareTo(SipRoute o) {
+        if (o == null) return -1;
+        return this.patternMatcher.compareTo(o.patternMatcher);
     }
 }

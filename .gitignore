@@ -17,3 +17,7 @@ build/
 *.log
 *.csv
 results*.json
+.env
+.env.*
+*.env
+demo/.env

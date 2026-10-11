@@ -26,6 +26,12 @@ public class VxmlElseIf implements VxmlNode {
         return Collections.unmodifiableList(executables);
     }
 
+    public void addExecutable(VxmlExecutable exec) {
+        if (exec != null) {
+            this.executables.add(exec);
+        }
+    }
+
     @Override
     public String toString() {
         return "VxmlElseIf{cond='" + cond + "', executables=" + executables + '}';
