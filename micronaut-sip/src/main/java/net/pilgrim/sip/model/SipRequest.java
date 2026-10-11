@@ -144,6 +144,11 @@ public class SipRequest extends SipMessage {
             respHeaders.addVia(via);
         }
 
+        // 1b. Copy all Record-Route headers in exact order per RFC 3261 §12.1.1
+        for (String rr : this.headers.getAll(SipHeaders.RECORD_ROUTE)) {
+            respHeaders.add(SipHeaders.RECORD_ROUTE, rr);
+        }
+
         // 2. Copy From header
         if (this.getFrom() != null) {
             respHeaders.setFrom(this.getFrom());

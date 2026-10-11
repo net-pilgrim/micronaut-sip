@@ -183,6 +183,14 @@ public class EarlyMediaController extends BaseSipController {
         return onEarlyMediaInvite(request, callId, sdpOffer, session);
     }
 
+    @OnInvite("earlymedia")
+    public Flux<SipResponse> onEarlymediaInvite(SipRequest request,
+                                                @SipCallId String callId,
+                                                @SipBody String sdpOffer,
+                                                SipSession session) {
+        return onEarlyMediaInvite(request, callId, sdpOffer, session);
+    }
+
     /**
      * Generates a North American standard dual-frequency (440 Hz + 480 Hz) ringback tone
      * in linear PCM-16LE format (8000 Hz, mono).

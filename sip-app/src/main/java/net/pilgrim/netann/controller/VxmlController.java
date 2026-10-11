@@ -3,6 +3,7 @@ package net.pilgrim.netann.controller;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
+import java.util.function.Predicate;
 import net.pilgrim.netann.config.NetannConfiguration;
 import net.pilgrim.netann.service.AnnouncementAudioLoader;
 import net.pilgrim.vxml.ast.VxmlDocument;
@@ -448,17 +449,13 @@ public class VxmlController {
         }
 
         try {
-            String targetUri = originalInvite.getContact();
-            if (targetUri == null || targetUri.isEmpty()) {
-                targetUri = originalInvite.getFrom();
-            }
-            if (targetUri != null) {
-                targetUri = targetUri.replaceAll("^<|>$", "").split(";")[0];
-            } else {
-                targetUri = originalInvite.getUri().toString();
-            }
+            SipUri targetUri = Optional.ofNullable(originalInvite.getContact())
+                    .filter(Predicate.not(String::isEmpty))
+                    .map(SipUri::extractUri)
+                    .or(() -> Optional.ofNullable(originalInvite.getFrom()).map(SipUri::extractUri))
+                    .orElseGet(originalInvite::getUri);
 
-            SipRequest bye = new SipRequest(SipMethod.BYE, SipUri.parse(targetUri));
+            SipRequest bye = new SipRequest(SipMethod.BYE, targetUri);
             bye.setRemoteAddress(originalInvite.getRemoteAddress());
             bye.setTransport(originalInvite.getTransport());
 

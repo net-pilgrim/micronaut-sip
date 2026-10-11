@@ -1,0 +1,47 @@
+services:
+  # Edge SIP Proxy routing inbound traffic to backend sip-app
+  sip-proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: demo-sip-proxy
+    restart: unless-stopped
+    ports:
+      - "5080:5060/udp"
+      - "5080:5060/tcp"
+    volumes:
+      - ./proxy/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+    depends_on:
+      - sip-app
+    networks:
+      sip-net:
+        aliases:
+          - sip-proxy
+
+  # Unified Micronaut SIP application hosting all controllers
+  sip-app:
+    build:
+      context: ..
+      dockerfile: demo/app/Dockerfile
+    container_name: demo-sip-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"                     # HTTP Management & /health endpoint
+      - "40000-40050:40000-40050/udp"   # Dynamic RTP audio media streaming ports
+    environment:
+      - SIP_SERVER_UDP_HOST=0.0.0.0
+      - SIP_SERVER_UDP_PORT=5060
+      - SIP_SERVER_TCP_HOST=0.0.0.0
+      - SIP_SERVER_TCP_PORT=5060
+      - SIP_SERVER_ADVERTISED_IP=127.0.0.1
+      - RTP_PORT_RANGE_START=40000
+      - RTP_PORT_RANGE_END=40050
+      - LOG_LEVEL=INFO
+    networks:
+      sip-net:
+        aliases:
+          - sip-app
+
+networks:
+  sip-net:
+    driver: bridge

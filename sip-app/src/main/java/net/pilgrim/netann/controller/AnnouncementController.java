@@ -346,13 +346,13 @@ public class AnnouncementController {
         }
 
         try {
-            String targetUri = Optional.ofNullable(originalInvite.getContact())
+            SipUri targetUri = Optional.ofNullable(originalInvite.getContact())
                     .filter(Predicate.not(String::isEmpty))
-                    .or(() -> Optional.ofNullable(originalInvite.getFrom()))
-                    .map(uri -> uri.replaceAll("^<|>$", "").split(";")[0])
-                    .orElseGet(() -> originalInvite.getUri().toString());
+                    .map(SipUri::extractUri)
+                    .or(() -> Optional.ofNullable(originalInvite.getFrom()).map(SipUri::extractUri))
+                    .orElseGet(originalInvite::getUri);
 
-            SipRequest bye = new SipRequest(SipMethod.BYE, SipUri.parse(targetUri));
+            SipRequest bye = new SipRequest(SipMethod.BYE, targetUri);
             bye.setRemoteAddress(originalInvite.getRemoteAddress());
             bye.setTransport(originalInvite.getTransport());
 

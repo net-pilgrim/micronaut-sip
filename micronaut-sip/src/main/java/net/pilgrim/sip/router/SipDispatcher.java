@@ -1163,17 +1163,12 @@ public class SipDispatcher implements ExecutableMethodProcessor<SipController> {
 
         try {
             // Determine Request-URI: Contact from original INVITE, or fallback to From URI
-            String targetUri = origReq.getContact();
-            if (targetUri == null || targetUri.isEmpty()) {
-                targetUri = origReq.getFrom();
-            }
-            if (targetUri != null) {
-                targetUri = targetUri.replaceAll("^<|>$", "").split(";")[0];
-            } else {
-                targetUri = origReq.getUri().toString();
-            }
+            SipUri targetUri = Optional.ofNullable(origReq.getContact())
+                    .map(SipUri::extractUri)
+                    .or(() -> Optional.ofNullable(origReq.getFrom()).map(SipUri::extractUri))
+                    .orElseGet(origReq::getUri);
 
-            SipRequest bye = new SipRequest(SipMethod.BYE, SipUri.parse(targetUri));
+            SipRequest bye = new SipRequest(SipMethod.BYE, targetUri);
             bye.setRemoteAddress(origReq.getRemoteAddress());
             bye.setTransport(origReq.getTransport());
 
