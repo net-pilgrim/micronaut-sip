@@ -52,6 +52,8 @@ public abstract class AbstractStreamTransportStrategy implements SipTransportStr
         return 2;
     }
 
+    protected final java.util.concurrent.ConcurrentMap<InetSocketAddress, Channel> connectedChannels = new java.util.concurrent.ConcurrentHashMap<>();
+
     @Override
     public synchronized void startServer(ServerTransportContext context) throws InterruptedException {
         if (running) {
@@ -75,6 +77,27 @@ public abstract class AbstractStreamTransportStrategy implements SipTransportStr
                         ChannelPipeline p = ch.pipeline();
                         p.addLast("streamDecoder", new SipStreamFrameDecoder(context.parser()));
                         p.addLast("streamEncoder", new SipStreamEncoder(context.encoder()));
+                        p.addLast("channelTracker", new ChannelInboundHandlerAdapter() {
+                            @Override
+                            public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                                InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+                                if (remote != null) {
+                                    connectedChannels.put(remote, ctx.channel());
+                                    LOG.debug("Tracking active SIP {} channel from {}", getTransport(), remote);
+                                }
+                                super.channelActive(ctx);
+                            }
+
+                            @Override
+                            public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+                                if (remote != null) {
+                                    connectedChannels.remove(remote, ctx.channel());
+                                    LOG.debug("Untracked active SIP {} channel from {}", getTransport(), remote);
+                                }
+                                super.channelInactive(ctx);
+                            }
+                        });
                         p.addLast(getTransport().name().toLowerCase() + "Handler",
                                 new SipTcpServerHandler(context.dispatcher(), context.responseRouter()));
                     }
@@ -100,6 +123,13 @@ public abstract class AbstractStreamTransportStrategy implements SipTransportStr
             return;
         }
         running = false;
+        for (Channel ch : connectedChannels.values()) {
+            try {
+                ch.close().syncUninterruptibly();
+            } catch (Exception ignored) {}
+        }
+        connectedChannels.clear();
+
         if (serverChannel != null) {
             try {
                 serverChannel.close().syncUninterruptibly();
@@ -145,6 +175,35 @@ public abstract class AbstractStreamTransportStrategy implements SipTransportStr
         message.setTransport(getTransport());
         message.setRemoteAddress(destination);
 
+        // 1. Check for active established inbound channel to this exact remote address
+        Channel activeChannel = connectedChannels.get(destination);
+        if (activeChannel != null && activeChannel.isActive()) {
+            LOG.info("Reusing active SIP {} connection to {}", getTransport(), destination);
+            return activeChannel.writeAndFlush(message);
+        }
+
+        // 2. Check for active channel whose remote host and port match destination
+        if (destination.getAddress() != null) {
+            for (java.util.Map.Entry<InetSocketAddress, Channel> entry : connectedChannels.entrySet()) {
+                if (entry.getKey().getAddress().equals(destination.getAddress())
+                        && entry.getKey().getPort() == destination.getPort()
+                        && entry.getValue().isActive()) {
+                    LOG.info("Reusing port-matched active SIP {} connection from {} for destination {}",
+                            getTransport(), entry.getKey(), destination);
+                    return entry.getValue().writeAndFlush(message);
+                }
+            }
+            // 2b. Fallback to any active channel on same host if destination is ephemeral or wildcard
+            for (java.util.Map.Entry<InetSocketAddress, Channel> entry : connectedChannels.entrySet()) {
+                if (entry.getKey().getAddress().equals(destination.getAddress()) && entry.getValue().isActive()) {
+                    LOG.info("Reusing host-matched active SIP {} connection from {} for destination {}",
+                            getTransport(), entry.getKey(), destination);
+                    return entry.getValue().writeAndFlush(message);
+                }
+            }
+        }
+
+        // 3. Fallback to outbound connection if no active channel exists
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(workerGroup)
                 .channel(NioSocketChannel.class)

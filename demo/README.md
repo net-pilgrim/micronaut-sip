@@ -197,3 +197,77 @@ python3 demo/test-sgw.py --port 5060 --camel
 python3 demo/test-sgw.py --port 5080 --transport tcp --camel
 ```
 
+---
+
+## 6. VoiceXML-Driven TTS + Mailbox Demo (Save `#` vs Cancel `*`)
+
+The interactive mailbox is driven entirely by a W3C VoiceXML 2.1 document (`<record beep="true" ...>`). It synthesizes dynamic TTS prompts over RTP, emits a 1000 Hz lead-in beep, captures inbound voice audio, and dynamically branches based on the terminating DTMF key:
+
+- **Save Flow (`#`)**: Plays completion TTS prompt (*"Thank you, your message has been recorded. Goodbye."*), commits the audio recording to Object Storage (`<caller>/<timestamp>.wav`), and hangs up with BYE.
+- **Cancel Flow (`*`)**: Evaluates `<if cond="msg$.termchar == '*'">`, plays cancellation TTS prompt (*"Your message has been cancelled. Goodbye."*), **discards** the audio without saving, and hangs up with BYE.
+
+### VoiceXML Answering Machine Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as SIP Client (Linphone / test-mailbox.py)
+    participant Proxy as Kamailio Proxy (:5080)
+    participant Mailbox as MailboxController (:5060)
+    participant Vxml as VoiceXML Interpreter
+    participant Storage as Object Storage
+
+    Caller->>Proxy: INVITE sip:mailbox@127.0.0.1:5080 (SDP offer)
+    Proxy->>Mailbox: INVITE sip:mailbox@...
+    Mailbox->>Proxy: 200 OK (SDP answer with RTP port)
+    Proxy->>Caller: 200 OK (SDP answer)
+    Caller->>Proxy: ACK sip:mailbox@...
+    Proxy->>Mailbox: ACK
+
+    Note over Mailbox,Vxml: VoiceXML FIA starts <form id="mailbox">
+    Vxml->>Caller: RTP Outbound: TTS Prompt ("Please leave your message after the tone...")
+    Vxml->>Caller: RTP Outbound: Beep (1000 Hz tone, 500 ms)
+    Caller->>Mailbox: RTP Inbound: Voice audio packets
+
+    alt User presses '#' (Save message)
+        Caller->>Proxy: INFO (Signal=#)
+        Proxy->>Mailbox: INFO (Signal=#)
+        Mailbox-->>Proxy: 200 OK (X-Received-DTMF: #)
+        Proxy-->>Caller: 200 OK
+        Vxml->>Caller: RTP Outbound: TTS Prompt ("Thank you, your message has been recorded. Goodbye.")
+        Mailbox->>Storage: Store audio recording (<caller>/<timestamp>.wav)
+    else User presses '*' (Cancel message)
+        Caller->>Proxy: INFO (Signal=*)
+        Proxy->>Mailbox: INFO (Signal=*)
+        Mailbox-->>Proxy: 200 OK (X-Received-DTMF: *)
+        Proxy-->>Caller: 200 OK
+        Note over Vxml: <if cond="msg$.termchar == '*'">
+        Vxml->>Caller: RTP Outbound: TTS Prompt ("Your message has been cancelled. Goodbye.")
+        Note over Mailbox: Audio recording DISCARDED (not stored)
+    end
+
+    Mailbox->>Proxy: BYE (VoiceXML <exit/> reached)
+    Proxy->>Caller: BYE
+    Caller->>Proxy: 200 OK
+    Proxy->>Mailbox: 200 OK
+```
+
+### Running the Mailbox Demo Client (`test-mailbox.py`)
+
+A dedicated test and demo client [`test-mailbox.py`](test-mailbox.py) is included to exercise both the save and cancel flows:
+
+```bash
+# Run both Save (#) and Cancel (*) flows through the Kamailio proxy
+python3 demo/test-mailbox.py --transport tcp
+
+# Test specifically the save flow
+python3 demo/test-mailbox.py --mode save
+
+# Test specifically the cancellation flow
+python3 demo/test-mailbox.py --mode cancel
+
+# Test with a specific user mailbox (e.g. alice+mailbox)
+python3 demo/test-mailbox.py --mailbox-user alice+mailbox
+```
+
+

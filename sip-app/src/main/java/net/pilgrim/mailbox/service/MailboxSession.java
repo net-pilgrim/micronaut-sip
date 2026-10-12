@@ -154,6 +154,12 @@ public class MailboxSession {
             return; // Already persisted
         }
 
+        // Check if message was cancelled via '*' DTMF or cancelled dialog flag
+        if (isCancelled()) {
+            LOG.info("Voicemail for Call-ID: {} was cancelled by user ('*'). Discarding recording.", callId);
+            return;
+        }
+
         byte[] pcmData = null;
         long durationMs = 0;
 
@@ -254,5 +260,24 @@ public class MailboxSession {
 
     public boolean isRecording() {
         return mediaSession != null && mediaSession.isRecording();
+    }
+
+    public boolean isCompleted() {
+        return state == State.COMPLETED;
+    }
+
+    public boolean isCancelled() {
+        if (vxmlSession == null) {
+            return false;
+        }
+        Object termChar = vxmlSession.getDialogScope().get("msg$.termchar");
+        if (termChar != null && ("*".equals(termChar) || "*".equals(String.valueOf(termChar).trim()))) {
+            return true;
+        }
+        Object cancelledFlag = vxmlSession.getDialogScope().get("cancelled");
+        if (cancelledFlag != null && ("true".equalsIgnoreCase(String.valueOf(cancelledFlag).trim()) || Boolean.TRUE.equals(cancelledFlag))) {
+            return true;
+        }
+        return false;
     }
 }

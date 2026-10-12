@@ -240,7 +240,7 @@ public class MailboxController {
         activeSessions.put(callId, mailboxSession);
 
         Optional.ofNullable(vxmlDoc).ifPresentOrElse(
-                doc -> mailboxSession.start(doc, documentLoader, audioLoader, ttsClient),
+                doc -> Schedulers.boundedElastic().schedule(() -> mailboxSession.start(doc, documentLoader, audioLoader, ttsClient)),
                 () -> {
                     LOG.warn("No VoiceXML document present for Mailbox Call-ID: {}, terminating call.", callId);
                     terminateAndSendBye(mailboxSession);
@@ -346,6 +346,13 @@ public class MailboxController {
             String proto = (originalInvite.getTransport() == SipTransport.TCP) ? "TCP" : "UDP";
             String branch = "z9hG4bK-bye-" + UUID.randomUUID().toString().substring(0, 8);
             bye.getHeaders().set(SipHeaders.VIA, "SIP/2.0/" + proto + " " + host + ":" + port + ";branch=" + branch + ";rport");
+
+            java.util.List<String> recordRoutes = originalInvite.getHeaders().getAll(SipHeaders.RECORD_ROUTE);
+            if (recordRoutes != null && !recordRoutes.isEmpty()) {
+                for (String rr : recordRoutes) {
+                    bye.getHeaders().add("Route", rr);
+                }
+            }
 
             LOG.info("Sending in-dialog BYE for completed Mailbox Call-ID: {} to {}", callId, targetUri);
             sipServer.send(bye, originalInvite.getRemoteAddress());

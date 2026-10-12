@@ -50,6 +50,9 @@ public class RtpAudioPlayer implements Closeable {
             return;
         }
 
+        LOG.info("Starting RtpAudioPlayer for Call-ID: {}, audioData bytes: {}, target: {}",
+                mediaSession.getCallId(), audioData.length, mediaSession.getRemoteAddress());
+
         this.currentOffset = 0;
         this.isFirstPacket = true;
 
@@ -78,11 +81,11 @@ public class RtpAudioPlayer implements Closeable {
             try {
                 mediaSession.sendAudioFrame(frame, isFirstPacket).subscribe(
                         null,
-                        e -> LOG.debug("Error sending RTP frame: {}", e.getMessage())
+                        e -> LOG.warn("Error sending RTP frame for Call-ID {}: {}", mediaSession.getCallId(), e.getMessage(), e)
                 );
                 isFirstPacket = false;
             } catch (Exception e) {
-                LOG.debug("Exception sending RTP frame: {}", e.getMessage());
+                LOG.warn("Exception sending RTP frame for Call-ID {}: {}", mediaSession.getCallId(), e.getMessage(), e);
             }
         }
 

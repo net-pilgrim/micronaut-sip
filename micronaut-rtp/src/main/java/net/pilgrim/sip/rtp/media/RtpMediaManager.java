@@ -125,7 +125,7 @@ public class RtpMediaManager implements Closeable {
 
             Bootstrap bootstrap = new Bootstrap();
             bootstrap.group(workerGroup)
-                    .channel(NioDatagramChannel.class)
+                    .channelFactory(() -> new NioDatagramChannel(io.netty.channel.socket.InternetProtocolFamily.IPv4))
                     .option(ChannelOption.SO_REUSEADDR, true)
                     .option(ChannelOption.SO_RCVBUF, 1024 * 1024)
                     .option(ChannelOption.SO_SNDBUF, 1024 * 1024)

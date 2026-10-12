@@ -236,6 +236,8 @@ public final class RtpMediaSession implements Closeable {
                     bytesSent.add(packet.getPayload().length + 12);
                     sink.success();
                 } else {
+                    LOG.warn("Failed to write RTP packet for Call-ID {} to {}: {}",
+                            callId, target, future.cause().getMessage(), future.cause());
                     sink.error(future.cause());
                 }
             });

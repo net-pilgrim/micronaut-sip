@@ -1,5 +1,6 @@
 package net.pilgrim.vxml.speech;
 
+import io.micronaut.context.annotation.Secondary;
 import jakarta.inject.Singleton;
 import reactor.core.publisher.Mono;
 
@@ -9,6 +10,7 @@ import reactor.core.publisher.Mono;
  * as PCM-16LE 8 kHz mono audio.
  */
 @Singleton
+@Secondary
 public class DefaultTtsClient implements TtsClient {
 
     @Override
@@ -34,7 +36,9 @@ public class DefaultTtsClient implements TtsClient {
             return Mono.just(ToneGenerator.generateTone(freq, durMs));
         }
 
-        // Generate a standard pleasant prompt chime (520 Hz, 400 ms)
-        return Mono.just(ToneGenerator.generateTone(520, 400));
+        // Estimate duration based on word count: ~150 ms per word, min 400 ms, max 3000 ms
+        int words = Math.max(1, trimmed.split("\\s+").length);
+        int durationMs = Math.min(3000, Math.max(400, words * 150));
+        return Mono.just(ToneGenerator.generateTone(520, durationMs));
     }
 }

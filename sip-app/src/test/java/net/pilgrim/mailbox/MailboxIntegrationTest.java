@@ -313,6 +313,105 @@ public class MailboxIntegrationTest {
     }
 
     @Test
+    void testMailboxCallCancelledWithStarDtmfDiscardsAudio() throws Exception {
+        InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
+        String callId = "mailbox-test-cancel-" + UUID.randomUUID();
+
+        try (DatagramSocket callerRtpSocket = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"))) {
+            callerRtpSocket.setSoTimeout(3000);
+            int callerRtpPort = callerRtpSocket.getLocalPort();
+
+            String sdpOffer = """
+                    v=0
+                    o=Tester 1000 1000 IN IP4 127.0.0.1
+                    s=MailboxTest
+                    c=IN IP4 127.0.0.1
+                    t=0 0
+                    m=audio %d RTP/AVP 0 8
+                    a=rtpmap:0 PCMU/8000
+                    a=rtpmap:8 PCMA/8000
+                    a=sendrecv
+                    """.formatted(callerRtpPort);
+
+            SipRequest invite = SipRequest.builder(SipMethod.INVITE, "sip:mailbox@127.0.0.1:" + server.getPort())
+                    .from("<sip:caller-cancel@127.0.0.1>;tag=caller-cancel-tag")
+                    .to("<sip:mailbox@127.0.0.1>")
+                    .callId(callId)
+                    .contentType("application/sdp")
+                    .body(sdpOffer)
+                    .build();
+
+            SipResponse ok = client.send(invite, serverAddress).block(Duration.ofSeconds(3));
+            assertNotNull(ok);
+            assertEquals(200, ok.getStatusCode());
+
+            SdpMessage sdpAnswer = sdpParser.parse(ok.getBodyAsString());
+            int serverRtpPort = sdpAnswer.findFirstAudioMedia().getPort();
+            InetSocketAddress serverRtpAddress = new InetSocketAddress("127.0.0.1", serverRtpPort);
+
+            client.sendAck(invite, ok, serverAddress).block(Duration.ofSeconds(2));
+
+            // Wait for prompt and beep to finish and recording to start
+            long recordDeadline = System.currentTimeMillis() + 4000;
+            while (System.currentTimeMillis() < recordDeadline) {
+                Optional<MailboxSession> mbOpt = mailboxController.findSession(callId);
+                if (mbOpt.isPresent() && mbOpt.get().isRecording()) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+
+            // Stream voice audio frames
+            int seq = 250;
+            long timestamp = 400000;
+            long ssrc = 0x55443322L;
+            for (int i = 0; i < 20; i++) {
+                byte[] pcmFrame = new byte[320];
+                for (int j = 0; j < pcmFrame.length; j++) {
+                    pcmFrame[j] = (byte) ((i * 7 + j) & 0x7F);
+                }
+                byte[] pcmuPayload = g711Codec.encodePcm16Le(pcmFrame);
+                RtpPacket rtp = new RtpPacket(i == 0, 0, seq++, timestamp, ssrc, pcmuPayload);
+                timestamp += 160;
+
+                byte[] packetBytes = rtp.toBytes();
+                DatagramPacket sendPacket = new DatagramPacket(packetBytes, packetBytes.length, serverRtpAddress);
+                callerRtpSocket.send(sendPacket);
+                Thread.sleep(20);
+            }
+
+            // Caller cancels voicemail by pressing '*' via SIP INFO
+            SipRequest info = SipRequest.builder(SipMethod.INFO, "sip:mailbox@127.0.0.1:" + server.getPort())
+                    .from(invite.getFrom())
+                    .to(ok.getTo())
+                    .callId(callId)
+                    .build();
+            info.setDtmf(new DtmfSignal('*', 160));
+
+            SipResponse infoResponse = client.send(info, serverAddress).block(Duration.ofSeconds(3));
+            assertNotNull(infoResponse);
+            assertEquals(200, infoResponse.getStatusCode());
+            assertEquals("*", infoResponse.getHeaders().get("X-Received-DTMF"));
+
+            // Wait for cancellation prompt playback and dialog completion
+            long completeDeadline = System.currentTimeMillis() + 4000;
+            while (System.currentTimeMillis() < completeDeadline) {
+                Optional<MailboxSession> mbOpt = mailboxController.findSession(callId);
+                if (mbOpt.isEmpty() || mbOpt.get().isCompleted()) {
+                    break;
+                }
+                Thread.sleep(50);
+            }
+
+            // Verify that NO message was persisted in Object Storage for caller-cancel
+            Thread.sleep(500);
+            Set<String> messages = recordingService.listMessages();
+            boolean foundCancelledMessage = messages.stream().anyMatch(key -> key.startsWith("caller-cancel/"));
+            assertFalse(foundCancelledMessage, "Cancelled voicemail must NOT be saved in Object Storage");
+        }
+    }
+
+    @Test
     void testAliePlusMailboxCallStoresUnderOwnerAndCaller() throws Exception {
         InetSocketAddress serverAddress = new InetSocketAddress("127.0.0.1", server.getPort());
         String callId = "mailbox-alie-test-" + UUID.randomUUID();

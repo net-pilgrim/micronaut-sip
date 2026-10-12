@@ -1,7 +1,7 @@
 package net.pilgrim.mrcp.vxml;
 
+import io.micronaut.context.annotation.Primary;
 import io.micronaut.context.annotation.Requires;
-import io.micronaut.context.annotation.Secondary;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
@@ -13,7 +13,7 @@ import reactor.core.publisher.Mono;
  * VoiceXML {@link TtsClient} adapter bridging VoiceXML prompt synthesis to Mistral Audio / MRCP.
  */
 @Singleton
-@Secondary
+@Primary
 @Named("mrcp")
 @Requires(classes = TtsClient.class)
 public class MrcpTtsClient implements TtsClient {

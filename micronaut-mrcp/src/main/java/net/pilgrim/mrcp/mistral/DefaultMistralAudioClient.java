@@ -83,6 +83,10 @@ public class DefaultMistralAudioClient implements MistralAudioClient {
                         }
                         LOG.warn("Mistral TTS API returned error {}: {}", response.statusCode(), response.body());
                         return mockFallback.synthesize(text, voice, language).block();
+                    })
+                    .exceptionally(ex -> {
+                        LOG.warn("Mistral TTS API call failed ({}), falling back to mock synthesizer", ex.getMessage());
+                        return mockFallback.synthesize(text, voice, language).block();
                     });
         });
     }
