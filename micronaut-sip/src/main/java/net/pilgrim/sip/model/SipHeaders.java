@@ -42,6 +42,7 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
     public static final String RACK = "RAck";                 // RFC 3262
     public static final String SIP_ETAG = "SIP-ETag";         // RFC 3903
     public static final String SIP_IF_MATCH = "SIP-If-Match"; // RFC 3903
+    public static final String ACCEPT = "Accept";
 
     // Common standard MIME content types for DTMF
     public static final String APPLICATION_DTMF_RELAY = "application/dtmf-relay"; // RFC 2976 / RFC 6086
@@ -84,6 +85,7 @@ public class SipHeaders implements Iterable<Map.Entry<String, List<String>>> {
         registerCanonical(RACK);
         registerCanonical(SIP_ETAG);
         registerCanonical(SIP_IF_MATCH);
+        registerCanonical(ACCEPT);
 
         // Compact forms as defined in RFC 3261 Section 7.3.3
         COMPACT_TO_CANONICAL.put("v", VIA);

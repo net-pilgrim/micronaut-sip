@@ -171,6 +171,7 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
       - [`SlowCallController`](sip-app/src/main/java/net/pilgrim/controller/SlowCallController.java): High-latency callee scenarios verifying non-blocking auto 100 Trying emission.
       - [`RegistrationController`](sip-app/src/main/java/net/pilgrim/controller/RegistrationController.java): RFC 3261 Section 10 SIP endpoint registrations.
       - [`DtmfController`](sip-app/src/main/java/net/pilgrim/controller/DtmfController.java): RFC 3428 instant MESSAGE and RFC 2976 / RFC 6086 INFO DTMF relay signaling.
+      - [`SignallingGatewayController`](sip-app/src/main/java/net/pilgrim/sgw/controller/SignallingGatewayController.java): Telecom Dummy Signalling Gateway (SGW) simulating TCAP over SIP (`sip:sgw@...`, `sip:tcap@...`). Exchanging JSON-encoded `TC_begin` in INVITE, `tc_continue` / `tc_abort` in mid-dialog INFO, and `tc_end` in BYE with stateful OTID/DTID tracking, server-initiated INFO push, GSM MAP (SRI-for-SM, PSI, Check IMEI, Forward SM, ATI), and CAMEL / INAP ASN.1 BER payload simulation (InitialDP, Connect, ApplyCharging, PlayAnnouncement, PromptAndCollectUserInformation/playAndCollectUserInfo, ReleaseCall).
       - [`BaseSipController`](sip-app/src/main/java/net/pilgrim/controller/BaseSipController.java): Shared base class managing transport, advertised IP, and Contact URI construction.
 
 ---
@@ -185,6 +186,7 @@ See the [RFC compliance matrix](doc/COMPLIANCE.md) for implemented standards and
 
 - See [doc/EXAMPLES.md](doc/EXAMPLES.md) for SIP controller and reactive filter examples.
 - See [doc/MICRONAUT-NETANN.md](doc/MICRONAUT-NETANN.md) for RFC 4240 NetAnn announcement service architecture, parameter specs, and detailed call flows with sequence diagrams.
+- See [doc/TCAP-SGW.md](doc/TCAP-SGW.md) for Telecom Signalling Gateway (SGW) architecture simulating TCAP over SIP, ASN.1 BER encoding, and GSM MAP & CAMEL/INAP call flows with Mermaid sequence diagrams.
 
 ---
 

@@ -107,6 +107,9 @@ python3 demo/test-call.py mailbox
 
 # Test CallController (180 Ringing -> 200 OK)
 python3 demo/test-call.py alice
+
+# Test Dummy Signalling Gateway (TCAP over SIP: INVITE TC_begin -> INFO tc_continue -> BYE tc_end)
+python3 demo/test-sgw.py --transport tcp
 ```
 
 ### Example Call Flow Output
@@ -145,3 +148,52 @@ Route: <sip:127.0.0.1:5080;transport=tcp;ftag=...;lr=on>
   - `loose_route()`: Dispatches sequential requests (ACK, BYE, INFO) according to the route set.
   - Forwarding: Routes initial dialogs (`$du = "sip:sip-app:5060"`) to the backend application.
 - **`app/Dockerfile`**: Containerizes the shaded `sip-app` fat JAR on Eclipse Temurin 25 JRE.
+
+---
+
+## 5. Testing the Dummy Signalling Gateway (TCAP over SIP)
+
+The `demo/test-sgw.py` script tests the Telecom Dummy Signalling Gateway controller in `sip-app` (`sip:sgw@...` / `sip:tcap@...`). It exchanges JSON and ASN.1 BER payloads across standard SIP dialogues.
+
+### Interaction Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as test-sgw.py
+    participant Proxy as Kamailio Proxy (:5080)
+    participant SGW as SGW Controller (:5060)
+
+    Client->>Proxy: INVITE sip:sgw@... (TC_begin, InitialDP or SRI-for-SM)
+    Proxy->>SGW: INVITE sip:sgw@... (Forwarded)
+    SGW-->>Proxy: 100 Trying
+    Proxy-->>Client: 100 Trying
+    SGW->>Proxy: 200 OK (tc_continue, dtid assigned, ApplyCharging / IMSI)
+    Proxy->>Client: 200 OK (Record-Route attached)
+    Client->>Proxy: ACK sip:sgw@...
+    Proxy->>SGW: ACK sip:sgw@...
+
+    Client->>Proxy: INFO sip:sgw@... (tc_continue, playAndCollectUserInfo or PSI)
+    Proxy->>SGW: INFO (Loose routed)
+    SGW->>Proxy: 200 OK (tc_continue, digitsResponse="1234#" or locationInfo)
+    Proxy->>Client: 200 OK
+
+    Client->>Proxy: BYE sip:sgw@... (tc_end)
+    Proxy->>SGW: BYE (Loose routed)
+    SGW->>Proxy: 200 OK (tc_end)
+    Proxy->>Client: 200 OK
+```
+
+### Running the Test Client
+
+```bash
+# Test GSM MAP dialogue directly against sip-app (port 5060) or through proxy (port 5080)
+python3 demo/test-sgw.py --port 5060
+
+# Test CAMEL / INAP dialogue carrying ASN.1 BER encoded payloads
+python3 demo/test-sgw.py --port 5060 --camel
+
+# Test over TCP transport through the Kamailio edge proxy
+python3 demo/test-sgw.py --port 5080 --transport tcp --camel
+```
+
