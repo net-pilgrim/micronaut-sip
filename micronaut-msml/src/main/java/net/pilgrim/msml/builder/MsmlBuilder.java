@@ -136,6 +136,14 @@ public final class MsmlBuilder {
             return this;
         }
 
+        public DialogStartBuilder play(URI audioUri) {
+            return play(AudioSource.of(audioUri), true);
+        }
+
+        public DialogStartBuilder play(URI audioUri, boolean barge) {
+            return play(AudioSource.of(audioUri), barge);
+        }
+
         public DialogStartBuilder play(MomlElement.Play play) {
             momlElements.add(play);
             return this;
@@ -143,6 +151,10 @@ public final class MsmlBuilder {
 
         public DialogStartBuilder record(String destUri) {
             return record(URI.create(destUri), Duration.ofSeconds(30), "#", true);
+        }
+
+        public DialogStartBuilder record(URI dest, Duration maxTime, String termChar) {
+            return record(dest, maxTime, termChar, true);
         }
 
         public DialogStartBuilder record(URI dest, Duration maxTime, String termChar, boolean beep) {

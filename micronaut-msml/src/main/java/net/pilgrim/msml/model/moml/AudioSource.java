@@ -25,11 +25,16 @@ public record AudioSource(URI uri, String format) {
         return new AudioSource(URI.create(uriStr), format != null ? format : "audio/wav");
     }
 
+
     public boolean isTone() {
         return uri.getScheme() != null && "tone".equalsIgnoreCase(uri.getScheme());
     }
 
     public boolean isTts() {
         return uri.getScheme() != null && "tts".equalsIgnoreCase(uri.getScheme());
+    }
+
+    public boolean isProv() {
+        return uri.getScheme() != null && "prov".equalsIgnoreCase(uri.getScheme());
     }
 }

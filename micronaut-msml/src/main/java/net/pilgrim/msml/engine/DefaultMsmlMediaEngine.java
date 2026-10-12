@@ -312,15 +312,8 @@ public class DefaultMsmlMediaEngine implements MsmlMediaEngine {
 
     private void saveRecording(URI dest, AudioRecording recording) {
         try {
-            if (dest.getScheme() == null || "file".equalsIgnoreCase(dest.getScheme())) {
-                String pathStr = dest.getPath() != null ? dest.getPath() : dest.getSchemeSpecificPart();
-                Path path = Paths.get(pathStr);
-                if (path.getParent() != null) {
-                    java.nio.file.Files.createDirectories(path.getParent());
-                }
-                recording.saveWav(path);
-                LOG.info("Saved recorded audio to WAV file: {}", path);
-            }
+            audioLoader.getProtocolRegistry().write(dest, recording.toWavBytes(), "audio/wav");
+            LOG.info("Persisted audio recording to destination URI: {}", dest);
         } catch (Exception e) {
             LOG.warn("Failed saving audio recording to {}: {}", dest, e.getMessage());
         }

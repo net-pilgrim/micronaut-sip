@@ -15,6 +15,7 @@ import net.pilgrim.sip.rtp.config.RtpConfiguration;
 import net.pilgrim.sip.rtp.media.AudioFrame;
 import net.pilgrim.sip.rtp.media.RtpMediaManager;
 import net.pilgrim.sip.rtp.media.RtpMediaSession;
+import net.pilgrim.vxml.storage.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,8 +48,13 @@ class MsmlMediaEngineTest {
         config.setBindAddress("127.0.0.1");
         config.setWorkerThreads(2);
         rtpManager = new RtpMediaManager(config);
+        ProvStorageConfiguration provConfig = new ProvStorageConfiguration();
+        provConfig.setAllowFileProtocol(true);
+        ProvStorageService storageService = new ProvStorageService(null, provConfig);
+        MediaProtocolRegistry registry = new MediaProtocolRegistry();
+        registry.register(new FileProtocolHandler(storageService));
+        audioLoader = new MsmlAudioLoader(registry);
         conferenceManager = new MsmlConferenceManager();
-        audioLoader = new MsmlAudioLoader(null);
         engine = new DefaultMsmlMediaEngine(rtpManager, conferenceManager, audioLoader);
     }
 

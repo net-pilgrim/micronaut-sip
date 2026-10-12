@@ -19,6 +19,7 @@ dependencies {
     implementation(project(":micronaut-sip"))
     implementation(project(":micronaut-vxml"))
     implementation(project(":micronaut-mrcp"))
+    implementation(project(":micronaut-msml"))
     implementation("io.micronaut.objectstorage:micronaut-object-storage-core")
     implementation("io.projectreactor:reactor-core")
     implementation("io.micronaut.serde:micronaut-serde-jackson")

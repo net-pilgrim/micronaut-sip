@@ -142,6 +142,23 @@ public class MsmlClient {
         return send(doc, destination, callId);
     }
 
+    public Mono<MsmlResult> playAudio(String callId, InetSocketAddress destination, URI audioUri) {
+        return playAudio(callId, destination, audioUri.toString(), true);
+    }
+
+    public Mono<MsmlResult> playAudio(String callId, InetSocketAddress destination, URI audioUri, boolean barge) {
+        return playAudio(callId, destination, audioUri.toString(), barge);
+    }
+
+    public Mono<MsmlResult> playAndRecord(String callId,
+                                          InetSocketAddress destination,
+                                          URI audioUri,
+                                          URI dest,
+                                          Duration maxTime,
+                                          String termChar) {
+        return playAndRecord(callId, destination, audioUri.toString(), dest, maxTime, termChar);
+    }
+
     public Mono<MsmlResult> playAndRecord(String callId,
                                           InetSocketAddress destination,
                                           String audioUri,

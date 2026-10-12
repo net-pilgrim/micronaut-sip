@@ -37,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Handles mid-dialog MSML commands via SIP INFO requests, establishes media sessions
  * via SIP INVITE, and dispatches execution to {@link MsmlMediaEngine}.
  */
-@SipController
+@SipController("msml")
 @Singleton
 public class MsmlServerController {
 
