@@ -1,0 +1,79 @@
+plugins {
+    id("io.micronaut.library") version "5.0.2"
+    id("maven-publish")
+}
+
+version = "0.1." + (findProperty("buildNumber") ?: "3")
+group = "net.pilgrim"
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    annotationProcessor("io.micronaut:micronaut-inject-java")
+
+    api(project(":micronaut-sip"))
+    api(project(":micronaut-rtp"))
+    api(project(":micronaut-sdp"))
+    api(project(":micronaut-vxml"))
+
+    api("io.projectreactor:reactor-core")
+    api("org.slf4j:slf4j-api")
+
+    compileOnly("io.micronaut:micronaut-inject-java")
+    compileOnly("io.micronaut:micronaut-context")
+
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter-api")
+    testImplementation("io.projectreactor:reactor-test")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+java {
+    sourceCompatibility = JavaVersion.toVersion("25")
+    targetCompatibility = JavaVersion.toVersion("25")
+    withSourcesJar()
+    withJavadocJar()
+}
+
+micronaut {
+    testRuntime("junit5")
+    processing {
+        incremental(true)
+        annotations("net.pilgrim.msml.*")
+    }
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    failOnNoDiscoveredTests = false
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = "net.pilgrim"
+            artifactId = "micronaut-msml"
+            version = project.version
+
+            pom {
+                name = "Micronaut MSML"
+                description = "RFC 5707 Media Server Markup Language (MSML) parser, builder, client, and media server engine"
+                url = "https://github.com/example/micronaut-sip"
+                licenses {
+                    license {
+                        name = "GNU Affero General Public License v3.0"
+                        url = "https://www.gnu.org/licenses/agpl-3.0.txt"
+                    }
+                }
+            }
+        }
+    }
+}
