@@ -270,15 +270,17 @@ sip.server.max-sessions=10000
 ./sip-app/build/native/nativeCompile/sip-app
 ```
 
-### Publish Library to Maven Local
+### Publish Libraries to Maven Local
 ```bash
-./gradlew :micronaut-sdp:publishToMavenLocal :micronaut-rtp:publishToMavenLocal :micronaut-sip:publishToMavenLocal
+./gradlew publishToMavenLocal
 ```
+*(Or individually: `./gradlew :micronaut-sdp:publishToMavenLocal :micronaut-rtp:publishToMavenLocal :micronaut-sip:publishToMavenLocal :micronaut-mrcp:publishToMavenLocal :micronaut-vxml:publishToMavenLocal :micronaut-msml:publishToMavenLocal`)*
 
-### Publish Library to GitHub Packages
+### Publish Libraries to GitHub Packages
 ```bash
-./gradlew :micronaut-sdp:publishAllPublicationsToGitHubPackagesRepository :micronaut-rtp:publishAllPublicationsToGitHubPackagesRepository :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository
+./gradlew publishAllPublicationsToGitHubPackagesRepository
 ```
+*(Or individually: `./gradlew :micronaut-sdp:publishAllPublicationsToGitHubPackagesRepository :micronaut-rtp:publishAllPublicationsToGitHubPackagesRepository :micronaut-sip:publishAllPublicationsToGitHubPackagesRepository :micronaut-mrcp:publishAllPublicationsToGitHubPackagesRepository :micronaut-vxml:publishAllPublicationsToGitHubPackagesRepository :micronaut-msml:publishAllPublicationsToGitHubPackagesRepository`)*
 
 ---
 
@@ -287,7 +289,7 @@ sip.server.max-sessions=10000
 The workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) automates:
 - **Build & Test**: Checks out code, configures Zulu JDK 25 with Gradle cache, and runs `./gradlew check test --info`.
 - **Artifact Archiving**: Saves test XML and HTML reports as build artifacts.
-- **Publishing**: On pushes to `main`/`master` or new releases, publishes `net.pilgrim:micronaut-sdp`, `net.pilgrim:micronaut-rtp`, and `net.pilgrim:micronaut-sip` to GitHub Packages.
+- **Publishing**: On pushes to `main`/`master` or new releases, publishes all library modules (`net.pilgrim:micronaut-sdp`, `net.pilgrim:micronaut-rtp`, `net.pilgrim:micronaut-sip`, `net.pilgrim:micronaut-mrcp`, `net.pilgrim:micronaut-vxml`, `net.pilgrim:micronaut-msml`) to GitHub Packages.
 
 ---
 
