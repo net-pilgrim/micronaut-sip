@@ -65,7 +65,7 @@ publishing {
             pom {
                 name = "Micronaut SIP"
                 description = "Reactive SIP (RFC 3261) library for Micronaut over UDP and TCP"
-                url = "https://github.com/example/micronaut-sip"
+                url = "https://github.com/net-pilgrim/micronaut-sip"
                 licenses {
                     license {
                         name = "GNU Affero General Public License v3.0"
@@ -84,7 +84,7 @@ publishing {
     repositories {
         maven {
             name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/" + (System.getenv("GITHUB_REPOSITORY") ?: "example/micronaut-sip"))
+            url = uri("https://maven.pkg.github.com/" + (System.getenv("GITHUB_REPOSITORY") ?: "net-pilgrim/micronaut-sip"))
             credentials {
                 username = System.getenv("GITHUB_ACTOR") ?: ""
                 password = System.getenv("GITHUB_TOKEN") ?: ""
