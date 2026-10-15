@@ -29,7 +29,10 @@ dependencies {
     compileOnly("io.micronaut:micronaut-inject-java")
     compileOnly("io.micronaut:micronaut-management")
 
+    // Add sip-app to test against real controllers
+    testImplementation(project(":sip-app"))
     testImplementation("io.micronaut:micronaut-management")
+    testImplementation("io.micronaut.test:micronaut-test-junit5")
     testImplementation("io.projectreactor:reactor-test")
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testRuntimeOnly("ch.qos.logback:logback-classic")

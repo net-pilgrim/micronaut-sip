@@ -13,17 +13,22 @@ import net.pilgrim.sip.model.*;
 import net.pilgrim.sip.sdp.SdpMessage;
 import net.pilgrim.sip.sdp.SdpParser;
 import org.assertj.core.api.Assertions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
  * Cucumber Step Definitions for Gherkin-based SIP verification.
  */
 public class SipStepDefinitions {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SipStepDefinitions.class);
 
     private final ScenarioContext context;
     private final VirtualUserAgentManager agentManager = new VirtualUserAgentManager();
@@ -93,6 +98,16 @@ public class SipStepDefinitions {
         context.setSutAddress(addr);
     }
 
+    @Given("the SIP server is running")
+    public void givenServerIsRunning() {
+        SipServerManager manager = SipServerManager.getInstance();
+        if (!manager.isStarted()) {
+            manager.startServer();
+        }
+        context.setSutAddress(manager.getServerAddress());
+        LOG.info("SIP server confirmed running at {}", manager.getServerAddress());
+    }
+
     // ==========================================
     // When Steps: Sending Requests & Responses
     // ==========================================
@@ -149,10 +164,20 @@ public class SipStepDefinitions {
         }
 
         SipMethod method = SipMethod.valueOf(methodName.trim().toUpperCase());
+
+        // For INVITE requests, generate a unique Call-ID per actor to support concurrent calls
+        // For in-dialog methods (ACK, BYE, etc.), use the Call-ID from the actor's last INVITE
+        String callId;
+        if (method == SipMethod.INVITE) {
+            callId = UUID.randomUUID().toString() + "@" + sender.getName() + ".sip-bdd.local";
+        } else {
+            callId = sender.getLastCallId() != null ? sender.getLastCallId() : context.getOrCreateCallId();
+        }
+
         SipRequest.Builder builder = SipRequest.builder(method, targetUri)
                 .from("<" + sender.getSipUri() + ">")
                 .to("<" + targetUri + ">")
-                .callId(context.getOrCreateCallId())
+                .callId(callId)
                 .contact(sender.getContactHeader());
 
         if (headers != null) {
@@ -238,15 +263,80 @@ public class SipStepDefinitions {
     @When("{string} sends an ACK to {string}")
     public void sendsAck(String senderName, String recipientName) {
         VirtualUserAgent sender = context.requireActor(senderName);
-        VirtualUserAgent recipient = context.requireActor(recipientName);
-        sender.sendAck(recipient);
+        VirtualUserAgent recipient = context.getActor(recipientName);
+
+        if (recipient != null) {
+            sender.sendAck(recipient);
+        } else {
+            // Sending ACK to SUT - construct ACK from the dialog context
+            SipRequest orig = context.getLastRequest();
+            SipResponse resp = (SipResponse) context.getLastReceivedMessage();
+
+            if (orig == null) {
+                throw new IllegalStateException("Cannot send ACK: no prior INVITE found");
+            }
+            if (resp == null) {
+                throw new IllegalStateException("Cannot send ACK: no response received");
+            }
+
+            InetSocketAddress dest = resp.getRemoteAddress() != null ? resp.getRemoteAddress() : context.getSutAddress();
+            String requestUri = resp.getHeaders().get("Contact");
+            if (requestUri == null || requestUri.isEmpty()) {
+                requestUri = orig.getUri().toString();
+            } else {
+                // Extract URI from Contact header
+                requestUri = requestUri.replaceAll("^.*<(.+)>.*$", "$1");
+            }
+
+            SipRequest ack = SipRequest.builder(SipMethod.ACK, requestUri)
+                    .from(orig.getFrom())
+                    .to(resp.getTo() != null ? resp.getTo() : orig.getTo())
+                    .callId(orig.getCallId())
+                    .cseq(orig.getCSeqNumber(), SipMethod.ACK)
+                    .contact(sender.getContactHeader())
+                    .build();
+
+            sender.sendRequest(ack, dest, recipientName);
+        }
     }
 
     @When("{string} sends a BYE to {string}")
     public void sendsBye(String senderName, String recipientName) {
         VirtualUserAgent sender = context.requireActor(senderName);
-        VirtualUserAgent recipient = context.requireActor(recipientName);
-        sender.sendBye(recipient);
+        VirtualUserAgent recipient = context.getActor(recipientName);
+
+        if (recipient != null) {
+            sender.sendBye(recipient);
+        } else {
+            // Sending BYE to SUT - construct BYE from the dialog context
+            SipRequest orig = context.getLastRequest();
+            SipResponse resp = (SipResponse) context.getLastReceivedMessage();
+
+            if (orig == null) {
+                throw new IllegalStateException("Cannot send BYE: no active dialog or INVITE found");
+            }
+
+            InetSocketAddress dest = resp != null && resp.getRemoteAddress() != null ? resp.getRemoteAddress() : context.getSutAddress();
+            String requestUri = resp != null ? resp.getHeaders().get("Contact") : null;
+            if (requestUri == null || requestUri.isEmpty()) {
+                requestUri = orig.getUri().toString();
+            } else {
+                // Extract URI from Contact header
+                requestUri = requestUri.replaceAll("^.*<(.+)>.*$", "$1");
+            }
+
+            // Use the To header from the response if available (will have the remote tag)
+            String toHeader = resp != null && resp.getTo() != null ? resp.getTo() : orig.getTo();
+
+            SipRequest bye = SipRequest.builder(SipMethod.BYE, requestUri)
+                    .from(orig.getFrom())
+                    .to(toHeader)
+                    .callId(orig.getCallId())
+                    .contact(sender.getContactHeader())
+                    .build();
+
+            sender.sendRequest(bye, dest, recipientName);
+        }
     }
 
     @When("{string} sends PRACK acknowledging the provisional response to {string}")

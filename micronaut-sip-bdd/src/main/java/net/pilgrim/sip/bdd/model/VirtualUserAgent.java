@@ -44,6 +44,7 @@ public class VirtualUserAgent implements Closeable {
 
     private volatile String remoteTag;
     private volatile DialogState dialogState = DialogState.NONE;
+    private volatile String lastCallId;
     private volatile SipRequest lastReceivedInvite;
     private volatile SipRequest lastSentInvite;
     private volatile SipRequest lastReceivedRequest;
@@ -144,6 +145,7 @@ public class VirtualUserAgent implements Closeable {
 
         if (request.getMethod() == SipMethod.INVITE) {
             lastSentInvite = request;
+            lastCallId = request.getCallId();
             if (dialogState == DialogState.NONE) {
                 dialogState = DialogState.EARLY;
             }
@@ -399,6 +401,10 @@ public class VirtualUserAgent implements Closeable {
 
     public SipRequest getLastSentRequest() {
         return lastSentRequest;
+    }
+
+    public String getLastCallId() {
+        return lastCallId;
     }
 
     @Override
