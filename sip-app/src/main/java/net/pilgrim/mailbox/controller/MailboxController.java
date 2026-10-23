@@ -16,6 +16,7 @@ import net.pilgrim.sip.sdp.SdpMessage;
 import net.pilgrim.sip.sdp.SdpNegotiator;
 import net.pilgrim.sip.sdp.SdpParser;
 import net.pilgrim.sip.session.SipSession;
+import net.pilgrim.sip.util.VirtualThreads;
 import net.pilgrim.sip.session.SipSessionManager;
 import net.pilgrim.sip.transport.SipNettyServer;
 import net.pilgrim.vxml.ast.VxmlDocument;
@@ -139,12 +140,14 @@ public class MailboxController {
                             .orElseGet(() -> sdpNegotiator.createOffer(localAudioPort, advertisedIp));
 
                     String mailboxOwner = extractMailboxOwner(request.getUri()).orElse(null);
+                    String mailboxMode = extractMailboxMode(request.getUri()).orElse("deposit");
                     Optional.ofNullable(session).ifPresent(s -> {
                         s.setState(SipSession.State.EARLY);
                         s.setAttribute("vxmlDoc", vxmlDoc);
                         s.setAttribute("sdpOffer", sdpOffer);
                         s.setAttribute("originalInvite", request);
                         s.setAttribute("mailboxOwner", mailboxOwner);
+                        s.setAttribute("mailboxMode", mailboxMode);
                     });
 
                     int serverPort = (request.getTransport() == SipTransport.TCP)
@@ -220,6 +223,12 @@ public class MailboxController {
                 .or(() -> Optional.ofNullable(request.getUri()).flatMap(MailboxController::extractMailboxOwner))
                 .orElse(null);
 
+        String mailboxMode = Optional.ofNullable(session)
+                .map(s -> (String) s.getAttribute("mailboxMode"))
+                .or(() -> Optional.ofNullable(originalInvite).map(SipRequest::getUri).flatMap(MailboxController::extractMailboxMode))
+                .or(() -> Optional.ofNullable(request.getUri()).flatMap(MailboxController::extractMailboxMode))
+                .orElse("deposit");
+
         String caller = Optional.ofNullable(originalInvite)
                 .map(SipRequest::getFrom)
                 .orElse("anonymous");
@@ -240,12 +249,57 @@ public class MailboxController {
         activeSessions.put(callId, mailboxSession);
 
         Optional.ofNullable(vxmlDoc).ifPresentOrElse(
-                doc -> Schedulers.boundedElastic().schedule(() -> mailboxSession.start(doc, documentLoader, audioLoader, ttsClient)),
+                doc -> VirtualThreads.run(() -> mailboxSession.start(doc, documentLoader, audioLoader, ttsClient, mailboxMode)),
                 () -> {
                     LOG.warn("No VoiceXML document present for Mailbox Call-ID: {}, terminating call.", callId);
                     terminateAndSendBye(mailboxSession);
                 }
         );
+    }
+
+    @OnInvite("greeting")
+    public Mono<SipResponse> onGreetingInvite(SipRequest request,
+                                              @SipCallId String callId,
+                                              @SipBody String sdpOffer,
+                                              SipSession session) {
+        return onMailboxInvite(request, callId, sdpOffer, session);
+    }
+
+    @OnAck("greeting")
+    public void onGreetingAck(SipRequest request,
+                              @SipCallId String callId,
+                              SipSession session) {
+        onMailboxAck(request, callId, session);
+    }
+
+    @OnInvite("manage")
+    public Mono<SipResponse> onManageInvite(SipRequest request,
+                                            @SipCallId String callId,
+                                            @SipBody String sdpOffer,
+                                            SipSession session) {
+        return onMailboxInvite(request, callId, sdpOffer, session);
+    }
+
+    @OnAck("manage")
+    public void onManageAck(SipRequest request,
+                            @SipCallId String callId,
+                            SipSession session) {
+        onMailboxAck(request, callId, session);
+    }
+
+    @OnInvite("portal")
+    public Mono<SipResponse> onPortalInvite(SipRequest request,
+                                            @SipCallId String callId,
+                                            @SipBody String sdpOffer,
+                                            SipSession session) {
+        return onMailboxInvite(request, callId, sdpOffer, session);
+    }
+
+    @OnAck("portal")
+    public void onPortalAck(SipRequest request,
+                            @SipCallId String callId,
+                            SipSession session) {
+        onMailboxAck(request, callId, session);
     }
 
     // ==========================================
@@ -257,7 +311,8 @@ public class MailboxController {
                                           @SipCallId String callId,
                                           SipSession session) {
         LOG.info("Received BYE for Mailbox Call-ID: {}", callId);
-        Optional.ofNullable(activeSessions.remove(callId)).ifPresent(MailboxSession::onCallerHangup);
+        Optional.ofNullable(activeSessions.remove(callId))
+                .ifPresent(MailboxSession::onCallerHangup);
         cleanupCall(callId, session);
         return Mono.just(SipResponse.ok(request));
     }
@@ -274,7 +329,8 @@ public class MailboxController {
         return Optional.ofNullable(dtmf)
                 .map(signal -> {
                     LOG.info("Received DTMF '{}' via INFO for Mailbox Call-ID: {}", signal.getDigit(), callId);
-                    Optional.ofNullable(activeSessions.get(callId)).ifPresent(ms -> ms.onDtmf(signal.getDigit()));
+                    Optional.ofNullable(activeSessions.get(callId))
+                            .ifPresent(ms -> VirtualThreads.run(() -> ms.onDtmf(signal.getDigit())));
                     SipResponse response = SipResponse.ok(request);
                     response.getHeaders().set("X-Received-DTMF", String.valueOf(signal.getDigit()));
                     return Mono.just(response);
@@ -292,6 +348,51 @@ public class MailboxController {
                                 SipSession session) {
         LOG.info("Received CANCEL for Mailbox Call-ID: {}", callId);
         cleanupCall(callId, session);
+    }
+
+    @OnBye("greeting")
+    public Mono<SipResponse> onGreetingBye(SipRequest request, @SipCallId String callId, SipSession session) {
+        return onMailboxBye(request, callId, session);
+    }
+
+    @OnInfo("greeting")
+    public Mono<SipResponse> onGreetingInfo(SipRequest request, @SipCallId String callId, @Nullable @SipDtmf DtmfSignal dtmf, SipSession session) {
+        return onMailboxInfo(request, callId, dtmf, session);
+    }
+
+    @OnCancel("greeting")
+    public void onGreetingCancel(SipRequest request, @SipCallId String callId, SipSession session) {
+        onMailboxCancel(request, callId, session);
+    }
+
+    @OnBye("manage")
+    public Mono<SipResponse> onManageBye(SipRequest request, @SipCallId String callId, SipSession session) {
+        return onMailboxBye(request, callId, session);
+    }
+
+    @OnInfo("manage")
+    public Mono<SipResponse> onManageInfo(SipRequest request, @SipCallId String callId, @Nullable @SipDtmf DtmfSignal dtmf, SipSession session) {
+        return onMailboxInfo(request, callId, dtmf, session);
+    }
+
+    @OnCancel("manage")
+    public void onManageCancel(SipRequest request, @SipCallId String callId, SipSession session) {
+        onMailboxCancel(request, callId, session);
+    }
+
+    @OnBye("portal")
+    public Mono<SipResponse> onPortalBye(SipRequest request, @SipCallId String callId, SipSession session) {
+        return onMailboxBye(request, callId, session);
+    }
+
+    @OnInfo("portal")
+    public Mono<SipResponse> onPortalInfo(SipRequest request, @SipCallId String callId, @Nullable @SipDtmf DtmfSignal dtmf, SipSession session) {
+        return onMailboxInfo(request, callId, dtmf, session);
+    }
+
+    @OnCancel("portal")
+    public void onPortalCancel(SipRequest request, @SipCallId String callId, SipSession session) {
+        onMailboxCancel(request, callId, session);
     }
 
     // ==========================================
@@ -409,8 +510,32 @@ public class MailboxController {
                 .filter(Predicate.not(String::isBlank))
                 .flatMap(user -> {
                     int plusIdx = user.indexOf('+');
-                    if (plusIdx > 0 && user.substring(plusIdx + 1).equalsIgnoreCase("mailbox")) {
-                        return Optional.of(user.substring(0, plusIdx));
+                    if (plusIdx > 0) {
+                        String suffix = user.substring(plusIdx + 1).toLowerCase();
+                        if (suffix.equals("mailbox") || suffix.equals("manage") || suffix.equals("portal") || suffix.equals("greeting")) {
+                            return Optional.of(user.substring(0, plusIdx));
+                        }
+                    }
+                    return Optional.empty();
+                });
+    }
+
+    public static Optional<String> extractMailboxMode(SipUri uri) {
+        return Optional.ofNullable(uri)
+                .map(SipUri::getUser)
+                .map(String::trim)
+                .filter(Predicate.not(String::isBlank))
+                .flatMap(user -> {
+                    int plusIdx = user.indexOf('+');
+                    if (plusIdx > 0) {
+                        String suffix = user.substring(plusIdx + 1).toLowerCase();
+                        if (suffix.equals("manage") || suffix.equals("portal")) {
+                            return Optional.of("manage");
+                        } else if (suffix.equals("greeting")) {
+                            return Optional.of("greeting");
+                        } else {
+                            return Optional.of("deposit");
+                        }
                     }
                     return Optional.empty();
                 });

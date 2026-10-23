@@ -21,10 +21,11 @@ public class CcxmlSession {
     private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors()),
             r -> {
-                Thread t = new Thread(r, "ccxml-session-scheduler");
+                Thread t = new Thread(r, "ccxml-timer");
                 t.setDaemon(true);
                 return t;
-            });
+            }
+    );
 
     private final String sessionId;
     private final CcxmlDocument document;
@@ -277,26 +278,28 @@ public class CcxmlSession {
         Map<String, Object> hints = new HashMap<>();
         if (aai != null) hints.put("aai", aai);
 
-        String connId = connectionBridge.createCall(dest, callerId, timeout, hints).block();
-        if (connIdVar != null && !connIdVar.isBlank() && connId != null) {
-            setVariable(connIdVar, connId);
-        }
+        connectionBridge.createCall(dest, callerId, timeout, hints)
+                .subscribe(connId -> {
+                    if (connIdVar != null && !connIdVar.isBlank() && connId != null) {
+                        setVariable(connIdVar, connId);
+                    }
+                });
     }
 
     public void acceptCall(String connectionId, String hints) {
-        connectionBridge.acceptCall(connectionId).block();
+        connectionBridge.acceptCall(connectionId).subscribe();
     }
 
     public void rejectCall(String connectionId, int statusCode, String reason) {
-        connectionBridge.rejectCall(connectionId, statusCode, reason).block();
+        connectionBridge.rejectCall(connectionId, statusCode, reason).subscribe();
     }
 
     public void redirectCall(String connectionId, String dest, String reason) {
-        connectionBridge.redirectCall(connectionId, dest, reason).block();
+        connectionBridge.redirectCall(connectionId, dest, reason).subscribe();
     }
 
     public void disconnectCall(String connectionId, String reason) {
-        connectionBridge.disconnectCall(connectionId, reason).block();
+        connectionBridge.disconnectCall(connectionId, reason).subscribe();
     }
 
     // Dialog bridges
@@ -313,18 +316,20 @@ public class CcxmlSession {
             params.putAll(parameters);
         }
 
-        String dlgId = dialogBridge.startDialog(src, type, connectionId, conferenceId, params).block();
-        if (dialogIdVar != null && !dialogIdVar.isBlank() && dlgId != null) {
-            setVariable(dialogIdVar, dlgId);
-        }
+        dialogBridge.startDialog(src, type, connectionId, conferenceId, params)
+                .subscribe(dlgId -> {
+                    if (dialogIdVar != null && !dialogIdVar.isBlank() && dlgId != null) {
+                        setVariable(dialogIdVar, dlgId);
+                    }
+                });
     }
 
     public void terminateDialog(String dialogId, boolean immediate) {
-        dialogBridge.terminateDialog(dialogId, immediate).block();
+        dialogBridge.terminateDialog(dialogId, immediate).subscribe();
     }
 
     public void prepareDialog(String dialogId, String src, String type) {
-        dialogBridge.prepareDialog(dialogId, src, type).block();
+        dialogBridge.prepareDialog(dialogId, src, type).subscribe();
     }
 
     // Media bridges
@@ -332,22 +337,24 @@ public class CcxmlSession {
         Map<String, Object> attrs = new HashMap<>();
         if (reservedTalkers != null) attrs.put("reservedTalkers", reservedTalkers);
 
-        String confId = mediaBridge.createConference(confName, attrs).block();
-        if (confIdVar != null && !confIdVar.isBlank() && confId != null) {
-            setVariable(confIdVar, confId);
-        }
+        mediaBridge.createConference(confName, attrs)
+                .subscribe(confId -> {
+                    if (confIdVar != null && !confIdVar.isBlank() && confId != null) {
+                        setVariable(confIdVar, confId);
+                    }
+                });
     }
 
     public void destroyConference(String conferenceId) {
-        mediaBridge.destroyConference(conferenceId).block();
+        mediaBridge.destroyConference(conferenceId).subscribe();
     }
 
     public void join(String id1, String id2, DuplexMode duplex) {
-        mediaBridge.join(id1, id2, duplex).block();
+        mediaBridge.join(id1, id2, duplex).subscribe();
     }
 
     public void unjoin(String id1, String id2) {
-        mediaBridge.unjoin(id1, id2).block();
+        mediaBridge.unjoin(id1, id2).subscribe();
     }
 
     public void executeScript(String script, CcxmlEvent event) {

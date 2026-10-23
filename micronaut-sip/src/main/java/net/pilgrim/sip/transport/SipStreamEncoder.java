@@ -19,7 +19,6 @@ public class SipStreamEncoder extends MessageToByteEncoder<SipMessage> {
 
     @Override
     protected void encode(ChannelHandlerContext ctx, SipMessage msg, ByteBuf out) {
-        byte[] bytes = encoder.encode(msg);
-        out.writeBytes(bytes);
+        encoder.encode(msg, out);
     }
 }

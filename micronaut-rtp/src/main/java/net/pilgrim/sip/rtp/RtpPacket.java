@@ -24,6 +24,16 @@ public final class RtpPacket {
                      long timestamp,
                      long ssrc,
                      byte[] payload) {
+        this(marker, payloadType, sequenceNumber, timestamp, ssrc, payload, false);
+    }
+
+    public RtpPacket(boolean marker,
+                     int payloadType,
+                     int sequenceNumber,
+                     long timestamp,
+                     long ssrc,
+                     byte[] payload,
+                     boolean clonePayload) {
         if (payloadType < 0 || payloadType > 127) {
             throw new IllegalArgumentException("payloadType must be between 0 and 127");
         }
@@ -35,7 +45,8 @@ public final class RtpPacket {
         this.sequenceNumber = sequenceNumber;
         this.timestamp = timestamp & 0xFFFF_FFFFL;
         this.ssrc = ssrc & 0xFFFF_FFFFL;
-        this.payload = Objects.requireNonNull(payload, "payload").clone();
+        Objects.requireNonNull(payload, "payload");
+        this.payload = clonePayload ? payload.clone() : payload;
     }
 
     public boolean isMarker() {
@@ -60,6 +71,14 @@ public final class RtpPacket {
 
     public byte[] getPayload() {
         return payload.clone();
+    }
+
+    public byte[] getPayloadDirect() {
+        return payload;
+    }
+
+    public int getPayloadLength() {
+        return payload.length;
     }
 
     public byte[] toBytes() {

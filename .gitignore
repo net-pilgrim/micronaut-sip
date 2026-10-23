@@ -22,3 +22,4 @@ results*.json
 *.env
 demo/.env
 .claude/**
+nohup.out

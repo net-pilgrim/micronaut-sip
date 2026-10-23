@@ -99,4 +99,52 @@ class MailboxRecordingServiceTest {
         String key = recordingService.storeMessage("call-empty", "caller", empty);
         assertNull(key);
     }
+
+    @Test
+    void testCustomGreetingStorageAndRetrieval() {
+        byte[] pcm = new byte[8000 * 2];
+        for (int i = 0; i < pcm.length; i++) {
+            pcm[i] = (byte) ((i * 2) & 0x7F);
+        }
+        AudioRecording greetingRec = new AudioRecording("greeting-call-1", pcm, 8000, 1, 1000);
+
+        assertFalse(recordingService.hasCustomGreeting("charlie"));
+
+        String key = recordingService.storeGreeting("charlie", greetingRec);
+        assertNotNull(key);
+        assertEquals("charlie/greeting.wav", key);
+        assertTrue(recordingService.hasCustomGreeting("charlie"));
+
+        Optional<byte[]> retrieved = recordingService.retrieveGreeting("charlie");
+        assertTrue(retrieved.isPresent());
+        assertEquals(greetingRec.toWavBytes().length, retrieved.get().length);
+
+        // Delete greeting
+        boolean deleted = recordingService.deleteGreeting("charlie");
+        assertTrue(deleted);
+        assertFalse(recordingService.hasCustomGreeting("charlie"));
+    }
+
+    @Test
+    void testListMessagesForOwner() {
+        byte[] pcm = new byte[8000 * 2];
+        AudioRecording rec1 = new AudioRecording("msg-1", pcm, 8000, 1, 1000);
+        AudioRecording rec2 = new AudioRecording("msg-2", pcm, 8000, 1, 1000);
+
+        String k1 = recordingService.storeMessage("msg-1", "diana", "sip:1001@pbx.local", rec1);
+        String k2 = recordingService.storeMessage("msg-2", "diana", "sip:1002@pbx.local", rec2);
+        assertNotNull(k1);
+        assertNotNull(k2);
+
+        var list = recordingService.listMessagesForOwner("diana");
+        assertEquals(2, list.size());
+        assertEquals("diana", list.get(0).mailboxOwner());
+        assertTrue(list.get(0).audioUri().startsWith("prov://diana/"));
+
+        assertEquals(2, recordingService.getOwnerMessageCount("diana"));
+
+        recordingService.deleteMessage(k1);
+        recordingService.deleteMessage(k2);
+        assertEquals(0, recordingService.getOwnerMessageCount("diana"));
+    }
 }

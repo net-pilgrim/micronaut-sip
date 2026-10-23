@@ -101,6 +101,11 @@ class RtpVxmlMediaTest {
 
         interpreter.start();
 
+        long deadline = System.currentTimeMillis() + 3000;
+        while (!dialogCompleted.get() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50);
+        }
+
         assertTrue(dialogCompleted.get());
         assertEquals("yes", interpreter.getDocumentScope().get("answered"));
         assertEquals(VxmlSession.State.TERMINATED, interpreter.getState());

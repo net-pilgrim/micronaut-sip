@@ -52,43 +52,41 @@ public class DefaultMistralAudioClient implements MistralAudioClient {
             return mockFallback.synthesize(text, voice, language);
         }
 
-        return Mono.fromFuture(() -> {
-            String selectedVoice = (voice != null && !voice.isBlank()) ? voice : config.getDefaultVoice();
-            String jsonPayload = "{"
-                    + "\"model\":\"" + escapeJson(config.getTtsModel()) + "\","
-                    + "\"input\":\"" + escapeJson(text) + "\","
-                    + "\"voice\":\"" + escapeJson(selectedVoice) + "\","
-                    + "\"response_format\":\"wav\""
-                    + "}";
+        String selectedVoice = (voice != null && !voice.isBlank()) ? voice : config.getDefaultVoice();
+        String jsonPayload = "{"
+                + "\"model\":\"" + escapeJson(config.getTtsModel()) + "\","
+                + "\"input\":\"" + escapeJson(text) + "\","
+                + "\"voice\":\"" + escapeJson(selectedVoice) + "\","
+                + "\"response_format\":\"wav\""
+                + "}";
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(config.getBaseUrl() + "/audio/speech"))
-                    .timeout(Duration.ofSeconds(15))
-                    .header("Authorization", "Bearer " + config.getApiKey())
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload, StandardCharsets.UTF_8))
-                    .build();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getBaseUrl() + "/audio/speech"))
+                .timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bearer " + config.getApiKey())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload, StandardCharsets.UTF_8))
+                .build();
 
-            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-                    .thenApply(response -> {
-                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                            String body = response.body();
-                            String base64Data = extractJsonField(body, "audio_data");
-                            if (base64Data != null && !base64Data.isBlank()) {
-                                byte[] rawWav = java.util.Base64.getDecoder().decode(base64Data.trim());
-                                byte[] pcm16Le24k = extractPcmFromWav(rawWav);
-                                return resample24kTo8k(pcm16Le24k);
-                            }
-                            return body.getBytes(StandardCharsets.UTF_8);
+        return Mono.fromFuture(() -> httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)))
+                .flatMap(response -> {
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        String body = response.body();
+                        String base64Data = extractJsonField(body, "audio_data");
+                        if (base64Data != null && !base64Data.isBlank()) {
+                            byte[] rawWav = java.util.Base64.getDecoder().decode(base64Data.trim());
+                            byte[] pcm16Le24k = extractPcmFromWav(rawWav);
+                            return Mono.just(resample24kTo8k(pcm16Le24k));
                         }
-                        LOG.warn("Mistral TTS API returned error {}: {}", response.statusCode(), response.body());
-                        return mockFallback.synthesize(text, voice, language).block();
-                    })
-                    .exceptionally(ex -> {
-                        LOG.warn("Mistral TTS API call failed ({}), falling back to mock synthesizer", ex.getMessage());
-                        return mockFallback.synthesize(text, voice, language).block();
-                    });
-        });
+                        return Mono.just(body.getBytes(StandardCharsets.UTF_8));
+                    }
+                    LOG.warn("Mistral TTS API returned error {}: {}", response.statusCode(), response.body());
+                    return mockFallback.synthesize(text, voice, language);
+                })
+                .onErrorResume(ex -> {
+                    LOG.warn("Mistral TTS API call failed ({}), falling back to mock synthesizer", ex.getMessage());
+                    return mockFallback.synthesize(text, voice, language);
+                });
     }
 
     @Override
@@ -100,49 +98,51 @@ public class DefaultMistralAudioClient implements MistralAudioClient {
             return mockFallback.recognize(pcmAudio, grammar, language);
         }
 
-        return Mono.fromFuture(() -> {
-            byte[] wavBytes = encodePcmToWav(pcmAudio, config.getSampleRate(), 1);
-            String boundary = "----Boundary" + UUID.randomUUID();
+        byte[] wavBytes = encodePcmToWav(pcmAudio, config.getSampleRate(), 1);
+        String boundary = "----Boundary" + UUID.randomUUID();
 
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            try {
-                // model part
-                baos.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
-                baos.write("Content-Disposition: form-data; name=\"model\"\r\n\r\n".getBytes(StandardCharsets.UTF_8));
-                baos.write((config.getAsrModel() + "\r\n").getBytes(StandardCharsets.UTF_8));
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            // model part
+            baos.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+            baos.write("Content-Disposition: form-data; name=\"model\"\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+            baos.write((config.getAsrModel() + "\r\n").getBytes(StandardCharsets.UTF_8));
 
-                // file part
-                baos.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
-                baos.write("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".getBytes(StandardCharsets.UTF_8));
-                baos.write("Content-Type: audio/wav\r\n\r\n".getBytes(StandardCharsets.UTF_8));
-                baos.write(wavBytes);
-                baos.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            // file part
+            baos.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+            baos.write("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".getBytes(StandardCharsets.UTF_8));
+            baos.write("Content-Type: audio/wav\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+            baos.write(wavBytes);
+            baos.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
-                baos.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
-            } catch (IOException e) {
-                throw new RuntimeException("Error assembling multipart body", e);
-            }
+            baos.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return Mono.error(new RuntimeException("Error assembling multipart body", e));
+        }
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(config.getBaseUrl() + "/audio/transcriptions"))
-                    .timeout(Duration.ofSeconds(20))
-                    .header("Authorization", "Bearer " + config.getApiKey())
-                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(baos.toByteArray()))
-                    .build();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getBaseUrl() + "/audio/transcriptions"))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + config.getApiKey())
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(baos.toByteArray()))
+                .build();
 
-            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-                    .thenApply(response -> {
-                        if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                            String body = response.body();
-                            String text = extractJsonField(body, "text");
-                            float confidence = 0.92f;
-                            return new MistralRecognitionResult(text, confidence, language != null ? language : config.getDefaultLanguage(), Collections.emptyList());
-                        }
-                        LOG.warn("Mistral ASR API returned error {}: {}", response.statusCode(), response.body());
-                        return mockFallback.recognize(pcmAudio, grammar, language).block();
-                    });
-        });
+        return Mono.fromFuture(() -> httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)))
+                .flatMap(response -> {
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        String body = response.body();
+                        String text = extractJsonField(body, "text");
+                        float confidence = 0.92f;
+                        return Mono.just(new MistralRecognitionResult(text, confidence, language != null ? language : config.getDefaultLanguage(), Collections.emptyList()));
+                    }
+                    LOG.warn("Mistral ASR API returned error {}: {}", response.statusCode(), response.body());
+                    return mockFallback.recognize(pcmAudio, grammar, language);
+                })
+                .onErrorResume(ex -> {
+                    LOG.warn("Mistral ASR API call failed ({}), falling back to mock recognizer", ex.getMessage());
+                    return mockFallback.recognize(pcmAudio, grammar, language);
+                });
     }
 
     public static byte[] encodePcmToWav(byte[] pcmData, int sampleRate, int channels) {

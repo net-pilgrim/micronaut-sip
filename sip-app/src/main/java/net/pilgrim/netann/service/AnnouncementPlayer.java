@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,7 +29,8 @@ public class AnnouncementPlayer {
                 Thread t = new Thread(r, "netann-rtp-player");
                 t.setDaemon(true);
                 return t;
-            });
+            }
+    );
 
     private final RtpMediaSession mediaSession;
     private final byte[] audioData;
@@ -37,6 +39,7 @@ public class AnnouncementPlayer {
     private final long effectiveDurationMs;
     private final int maxRepeatCount;
     private final Runnable onComplete;
+    private final byte[] reusableFrame = new byte[BYTES_PER_20MS_FRAME];
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean completed = new AtomicBoolean(false);
@@ -124,12 +127,14 @@ public class AnnouncementPlayer {
             int remaining = audioData.length - currentOffset;
             int frameLen = Math.min(BYTES_PER_20MS_FRAME, remaining);
 
-            byte[] frame = new byte[BYTES_PER_20MS_FRAME];
-            System.arraycopy(audioData, currentOffset, frame, 0, frameLen);
+            if (frameLen < BYTES_PER_20MS_FRAME) {
+                Arrays.fill(reusableFrame, (byte) 0);
+            }
+            System.arraycopy(audioData, currentOffset, reusableFrame, 0, frameLen);
             currentOffset += frameLen;
 
             try {
-                mediaSession.sendAudioFrame(frame, isFirstPacket).subscribe(
+                mediaSession.sendAudioFrame(reusableFrame, isFirstPacket).subscribe(
                         null,
                         e -> LOG.warn("Failed sending RTP audio frame for Call-ID: {}: {}", mediaSession.getCallId(), e.getMessage())
                 );

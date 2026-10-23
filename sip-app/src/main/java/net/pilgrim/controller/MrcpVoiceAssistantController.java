@@ -42,11 +42,14 @@ public class MrcpVoiceAssistantController {
 
     private static final Logger LOG = LoggerFactory.getLogger(MrcpVoiceAssistantController.class);
 
-    private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(2, r -> {
-        Thread t = new Thread(r, "mrcp-assistant-scheduler");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors()),
+            r -> {
+                Thread t = new Thread(r, "mrcp-assistant-scheduler");
+                t.setDaemon(true);
+                return t;
+            }
+    );
 
     private final RtpMediaManager rtpMediaManager;
     private final MistralAudioClient mistralClient;

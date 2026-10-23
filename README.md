@@ -167,12 +167,29 @@ Measured mean call latency was approximately 52 ms for both builds; about 50 ms 
       - [`AnnouncementController`](sip-app/src/main/java/net/pilgrim/netann/controller/AnnouncementController.java): RFC 4240 NetAnn announcement media server (`sip:annc@...`, `sip:conf@...`), Request-URI audio parameters, 20ms RTP streaming, and automatic dialog completion.
       - [`VxmlController`](sip-app/src/main/java/net/pilgrim/netann/controller/VxmlController.java): RFC 4240 §4 Dialog Service & RFC 5552 VoiceXML media server interface (`sip:dialog@...`, `sip:vxml@...`).
       - [`VxmlDisabledController`](sip-app/src/main/java/net/pilgrim/netann/controller/VxmlDisabledController.java): RFC 4240 §2 fallback returning 488 when VoiceXML dialogs are disabled.
-      - [`MailboxController`](sip-app/src/main/java/net/pilgrim/mailbox/controller/MailboxController.java): RFC 5552 answering machine and voicemail service (`sip:mailbox@...`, `sip:<owner>+mailbox@...`) persisting recordings into Object Storage.
+      - [`MailboxController`](sip-app/src/main/java/net/pilgrim/mailbox/controller/MailboxController.java): RFC 5552 answering machine and voicemail service (`sip:mailbox@...`, `sip:<owner>+mailbox@...`, `sip:manage@...`, `sip:portal@...`) persisting recordings into Object Storage.
       - [`SlowCallController`](sip-app/src/main/java/net/pilgrim/controller/SlowCallController.java): High-latency callee scenarios verifying non-blocking auto 100 Trying emission.
       - [`RegistrationController`](sip-app/src/main/java/net/pilgrim/controller/RegistrationController.java): RFC 3261 Section 10 SIP endpoint registrations.
       - [`DtmfController`](sip-app/src/main/java/net/pilgrim/controller/DtmfController.java): RFC 3428 instant MESSAGE and RFC 2976 / RFC 6086 INFO DTMF relay signaling.
       - [`SignallingGatewayController`](sip-app/src/main/java/net/pilgrim/sgw/controller/SignallingGatewayController.java): Telecom Dummy Signalling Gateway (SGW) simulating TCAP over SIP (`sip:sgw@...`, `sip:tcap@...`). Exchanging JSON-encoded `TC_begin` in INVITE, `tc_continue` / `tc_abort` in mid-dialog INFO, and `tc_end` in BYE with stateful OTID/DTID tracking, server-initiated INFO push, GSM MAP (SRI-for-SM, PSI, Check IMEI, Forward SM, ATI), and CAMEL / INAP ASN.1 BER payload simulation (InitialDP, Connect, ApplyCharging, PlayAnnouncement, PromptAndCollectUserInformation/playAndCollectUserInfo, ReleaseCall).
       - [`BaseSipController`](sip-app/src/main/java/net/pilgrim/controller/BaseSipController.java): Shared base class managing transport, advertised IP, and Contact URI construction.
+
+19. **Event-Driven Non-Blocking Architecture, Java Virtual Threads & Zero-Copy Pipeline**:
+    - **Never Block the Event Loop**: Strictly eliminates thread-blocking operations (`latch.await()`, `.block()`, `Thread.sleep()`) from reactive session lifecycles.
+    - **Asynchronous State Machines**: VoiceXML ([`VxmlSession`](micronaut-vxml/src/main/java/net/pilgrim/vxml/runtime/VxmlSession.java)), CCXML ([`CcxmlSession`](micronaut-ccxml/src/main/java/net/pilgrim/ccxml/runtime/CcxmlSession.java)), and media sessions operate as event-driven state machines responding to timers and network events via continuation callbacks.
+    - **Java 25 Virtual Threads**: Inbound SIP requests and response routing are dispatched to Virtual Threads ([`VirtualThreads.run()`](micronaut-sip/src/main/java/net/pilgrim/sip/util/VirtualThreads.java)), keeping Netty I/O worker event loops unblocked.
+    - **Zero-Copy Netty Data Structures**:
+      - Direct `ByteBuf` encoding via [`SipEncoder.encode(SipMessage, ByteBuf)`](micronaut-sip/src/main/java/net/pilgrim/sip/parser/SipEncoder.java) and zero-copy slicing in [`SipStreamFrameDecoder`](micronaut-sip/src/main/java/net/pilgrim/sip/transport/SipStreamFrameDecoder.java) and [`SipParser`](micronaut-sip/src/main/java/net/pilgrim/sip/parser/SipParser.java).
+      - Non-cloning [`RtpPacket`](micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/RtpPacket.java) payloads and direct Netty [`RtpDatagramCodec`](micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/transport/RtpDatagramCodec.java) serialization.
+      - Per-session reusable 320-byte audio frame buffers in [`RtpAudioPlayer`](micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/media/RtpAudioPlayer.java) and [`AnnouncementPlayer`](sip-app/src/main/java/net/pilgrim/netann/service/AnnouncementPlayer.java) avoiding 50 allocations/sec per stream.
+      - NIO gathering writes (`FileChannel.write(new ByteBuffer[]{header, pcm})`) in [`AudioRecording.saveWav()`](micronaut-rtp/src/main/java/net/pilgrim/sip/rtp/media/AudioRecording.java) for zero-copy disk writes.
+
+20. **VoiceXML-Driven Voicemail & Answering Machine Service (RFC 5552)**:
+    - Production-ready Voicemail and Answering Machine service ([`MailboxController`](sip-app/src/main/java/net/pilgrim/mailbox/controller/MailboxController.java)) driven by [`voicemail_app.vxml`](sip-app/src/main/resources/vxml/voicemail_app.vxml) and Cloud Object Storage.
+    - Personalized greeting recording and playback (`prov://<owner>/greeting.wav`) with automatic fallback to system prompts.
+    - Caller voicemail deposit with dual-tone termination (`#`, `*`, or caller hangup/BYE) and multi-tenant persistence (`<owner>/<caller>/<timestamp>.wav`).
+    - Interactive management portal with PIN authentication, message playback, save, delete, and greeting update.
+    - High-density performance: verified and benchmarked at **100 concurrent calls** in **3.8 seconds** with 100% success rate. See [doc/VOICEMAIL.md](doc/VOICEMAIL.md).
 
 ---
 
@@ -185,6 +202,7 @@ See the [RFC compliance matrix](doc/COMPLIANCE.md) for implemented standards and
 ## Examples & Call Flows
 
 - See [doc/EXAMPLES.md](doc/EXAMPLES.md) for SIP controller and reactive filter examples.
+- See [doc/VOICEMAIL.md](doc/VOICEMAIL.md) for VoiceXML Voicemail & Answering Machine architecture, state machines, and 100 concurrent calls benchmark.
 - See [doc/MICRONAUT-NETANN.md](doc/MICRONAUT-NETANN.md) for RFC 4240 NetAnn announcement service architecture, parameter specs, and detailed call flows with sequence diagrams.
 - See [doc/TCAP-SGW.md](doc/TCAP-SGW.md) for Telecom Signalling Gateway (SGW) architecture simulating TCAP over SIP, ASN.1 BER encoding, and GSM MAP & CAMEL/INAP call flows with Mermaid sequence diagrams.
 

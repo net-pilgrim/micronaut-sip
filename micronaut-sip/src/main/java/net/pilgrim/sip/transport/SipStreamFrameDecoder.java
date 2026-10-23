@@ -74,9 +74,7 @@ public class SipStreamFrameDecoder extends ByteToMessageDecoder {
         }
 
         int headerLength = headerEnd - readerIndex;
-        byte[] headerBytes = new byte[headerLength];
-        in.getBytes(readerIndex, headerBytes);
-        String headerText = new String(headerBytes, StandardCharsets.UTF_8);
+        String headerText = in.toString(readerIndex, headerLength, StandardCharsets.UTF_8);
 
         // 3. Extract Content-Length
         int contentLength = extractContentLength(headerText);

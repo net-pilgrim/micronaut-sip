@@ -15,33 +15,10 @@ public class MailboxConfiguration {
     private int beepFrequencyHz = 1000;
     private int beepDurationMs = 500;
     private String storagePrefix = "";
-    private int maxActiveCalls = 50;
-    private int maxCallsPerIp = 10;
+    private int maxActiveCalls = 1000;
+    private int maxCallsPerIp = 500;
     private String advertisedIp;
-
-    private String promptVxml = """
-            <vxml version="2.1">
-              <form id="mailbox">
-                <var name="mailboxOwner" expr="''"/>
-                <var name="cancelled" expr="'false'"/>
-                <record name="msg" beep="true" maxtime="30s" finalsilence="3s" dtmfterm="true" type="audio/x-wav">
-                  <prompt bargein="true" cond="mailboxOwner != ''">Please leave your message for <value expr="mailboxOwner"/> after the tone. Press pound when finished, or star to cancel.</prompt>
-                  <prompt bargein="true" cond="mailboxOwner == ''">Please leave your message after the tone. Press pound when finished, or star to cancel.</prompt>
-                  <filled>
-                    <if cond="msg$.termchar == '*'">
-                      <assign name="cancelled" expr="'true'"/>
-                      <prompt>Your message has been cancelled. Goodbye.</prompt>
-                      <clear namelist="msg"/>
-                      <exit/>
-                    <else/>
-                      <prompt>Thank you, your message has been recorded. Goodbye.</prompt>
-                      <exit/>
-                    </if>
-                  </filled>
-                </record>
-              </form>
-            </vxml>
-            """;
+    private String promptVxml = "classpath:vxml/voicemail_app.vxml";
 
     public boolean isEnabled() {
         return enabled;

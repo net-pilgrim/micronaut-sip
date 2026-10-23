@@ -4,6 +4,7 @@ import net.pilgrim.sip.model.SipMessage;
 import net.pilgrim.sip.model.SipRequest;
 import net.pilgrim.sip.model.SipResponse;
 import net.pilgrim.sip.router.SipDispatcher;
+import net.pilgrim.sip.util.VirtualThreads;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Netty channel handler that delegates incoming SIP messages to the SipDispatcher or SipResponseRouter.
+ * Inbound SIP processing is dispatched onto Java Virtual Threads to keep Netty I/O loops unblocked.
  */
 public class SipServerHandler extends SimpleChannelInboundHandler<SipMessage> {
 
@@ -39,9 +41,9 @@ public class SipServerHandler extends SimpleChannelInboundHandler<SipMessage> {
                     channel.writeAndFlush(message);
                 }
             };
-            dispatcher.dispatch(request, sender);
+            VirtualThreads.run(() -> dispatcher.dispatch(request, sender));
         } else if (msg instanceof SipResponse response) {
-            responseRouter.handleResponse(response);
+            VirtualThreads.run(() -> responseRouter.handleResponse(response));
         }
     }
 

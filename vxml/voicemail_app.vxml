@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vxml version="2.1" xmlns="http://www.w3.org/2001/vxml">
+  <!-- Shared Voicemail Application Variables -->
+  <var name="mailboxOwner" expr="''"/>
+  <var name="greetingUrl" expr="''"/>
+  <var name="hasGreeting" expr="false"/>
+  <var name="messageCount" expr="0"/>
+  <var name="caller" expr="'anonymous'"/>
+  <var name="mode" expr="'deposit'"/>
+  <var name="cancelled" expr="'false'"/>
+  <var name="greetingCancelled" expr="'false'"/>
+  <var name="resetGreeting" expr="'false'"/>
+
+  <!-- Router: Directs to Deposit or Owner Portal based on mode -->
+  <form id="router">
+    <block>
+      <if cond="mode == 'manage' || mode == 'portal'">
+        <goto next="#owner_portal"/>
+      <elseif cond="mode == 'greeting'"/>
+        <goto next="#record_greeting_form"/>
+      <else/>
+        <goto next="#deposit_form"/>
+      </if>
+    </block>
+  </form>
+
+  <!-- ============================================== -->
+  <!-- 1. Caller Voicemail Deposit Flow               -->
+  <!-- ============================================== -->
+  <form id="deposit_form">
+    <record name="msg" beep="true" maxtime="60s" finalsilence="3s" dtmfterm="true" type="audio/x-wav">
+      <prompt bargein="true" cond="mailboxOwner != ''">
+        <audio expr="greetingUrl" alt="Please leave your message after the tone. Press pound when finished, or star for owner login.">
+          Please leave your message for <value expr="mailboxOwner"/> after the tone. Press pound when finished, or star for owner login.
+        </audio>
+      </prompt>
+      <prompt bargein="true" cond="mailboxOwner == ''">
+        Please leave your message after the tone. Press pound when finished, or star for owner login.
+      </prompt>
+
+      <filled>
+        <!-- If caller pressed '*' to cancel or switch to Owner Login -->
+        <if cond="msg$.termchar == '*'">
+          <assign name="cancelled" expr="'true'"/>
+          <prompt bargein="false">Your message has been cancelled. Goodbye.</prompt>
+          <clear namelist="msg"/>
+          <exit/>
+        <elseif cond="msg$.termchar == '2'"/>
+          <goto next="#deposit_review"/>
+        <else/>
+          <prompt bargein="false">Thank you, your message has been recorded. Goodbye.</prompt>
+          <exit/>
+        </if>
+      </filled>
+
+      <noinput>
+        <prompt>No message was detected. Goodbye.</prompt>
+        <exit/>
+      </noinput>
+    </record>
+  </form>
+
+  <!-- Caller Post-Recording Review Menu -->
+  <menu id="deposit_review">
+    <prompt bargein="true">
+      To send your message, press 1 or hang up.
+      To listen to your recording, press 2.
+      To re-record your message, press 3.
+      To cancel, press star.
+    </prompt>
+    <choice dtmf="1" next="#deposit_save"/>
+    <choice dtmf="2" next="#deposit_playback"/>
+    <choice dtmf="3" next="#deposit_re_record"/>
+    <choice dtmf="*" next="#deposit_cancel"/>
+  </menu>
+
+  <!-- Caller Re-record Form -->
+  <form id="deposit_re_record">
+    <block>
+      <clear namelist="msg"/>
+      <goto next="#deposit_form"/>
+    </block>
+  </form>
+
+  <!-- Caller Playback Form -->
+  <form id="deposit_playback">
+    <block>
+      <prompt bargein="true">
+        Your recorded message is:
+        <audio expr="msg"/>
+      </prompt>
+      <goto next="#deposit_review"/>
+    </block>
+  </form>
+
+  <!-- Caller Save Message Form -->
+  <form id="deposit_save">
+    <block>
+      <prompt bargein="true">Thank you. Your message has been saved. Goodbye.</prompt>
+      <exit/>
+    </block>
+  </form>
+
+  <!-- Caller Cancel Message Form -->
+  <form id="deposit_cancel">
+    <block>
+      <assign name="cancelled" expr="'true'"/>
+      <prompt bargein="true">Your message has been cancelled. Goodbye.</prompt>
+      <clear namelist="msg"/>
+      <exit/>
+    </block>
+  </form>
+
+  <!-- ============================================== -->
+  <!-- 2. Mailbox Owner Portal                        -->
+  <!-- ============================================== -->
+  <menu id="owner_portal">
+    <prompt bargein="true">
+      Voicemail Main Menu.
+      To listen to your messages, press 1.
+      To manage your personal greeting, press 2.
+      To exit, press star.
+    </prompt>
+    <choice dtmf="1" next="#inbox_menu"/>
+    <choice dtmf="2" next="#greeting_menu"/>
+    <choice dtmf="*" next="#portal_exit"/>
+  </menu>
+
+  <!-- ============================================== -->
+  <!-- 3. Mailbox Owner Greeting Management           -->
+  <!-- ============================================== -->
+  <menu id="greeting_menu">
+    <prompt bargein="true">
+      Greeting Menu.
+      To listen to your current greeting, press 1.
+      To record a new greeting, press 2.
+      To restore the default system greeting, press 3.
+      To return to the main menu, press star.
+    </prompt>
+    <choice dtmf="1" next="#play_existing_greeting"/>
+    <choice dtmf="2" next="#record_greeting_form"/>
+    <choice dtmf="3" next="#reset_default_greeting"/>
+    <choice dtmf="*" next="#owner_portal"/>
+  </menu>
+
+  <!-- Play Current Active Greeting -->
+  <form id="play_existing_greeting">
+    <block>
+      <prompt bargein="true">
+        Your current greeting is:
+        <audio expr="greetingUrl" alt="You are currently using the standard system greeting.">
+          You are currently using the standard system greeting.
+        </audio>
+      </prompt>
+      <goto next="#greeting_menu"/>
+    </block>
+  </form>
+
+  <!-- Record New Greeting Form -->
+  <form id="record_greeting_form">
+    <record name="newGreeting" beep="true" maxtime="30s" finalsilence="2500ms" dtmfterm="true" type="audio/x-wav">
+      <prompt bargein="true">
+        Please record your new greeting after the tone. Press pound when finished.
+      </prompt>
+      <filled>
+        <if cond="newGreeting$.termchar == '*'">
+          <assign name="greetingCancelled" expr="'true'"/>
+          <prompt bargein="false">Greeting recording cancelled.</prompt>
+          <clear namelist="newGreeting"/>
+          <exit/>
+        <elseif cond="newGreeting$.termchar == '2'"/>
+          <goto next="#greeting_review_menu"/>
+        <else/>
+          <prompt bargein="false">Your new greeting has been saved. Goodbye.</prompt>
+          <exit/>
+        </if>
+      </filled>
+      <noinput>
+        <prompt>Nothing was recorded. Returning to the greeting menu.</prompt>
+        <goto next="#greeting_menu"/>
+      </noinput>
+    </record>
+  </form>
+
+  <!-- Review Recorded Greeting Menu -->
+  <menu id="greeting_review_menu">
+    <prompt bargein="true">
+      To save your new greeting, press 1.
+      To listen to what you just recorded, press 2.
+      To re-record, press 3.
+      To cancel and discard, press star.
+    </prompt>
+    <choice dtmf="1" next="#save_new_greeting"/>
+    <choice dtmf="2" next="#play_recorded_greeting"/>
+    <choice dtmf="3" next="#re_record_greeting"/>
+    <choice dtmf="*" next="#cancel_new_greeting"/>
+  </menu>
+
+  <!-- Re-record Greeting Form -->
+  <form id="re_record_greeting">
+    <block>
+      <clear namelist="newGreeting"/>
+      <goto next="#record_greeting_form"/>
+    </block>
+  </form>
+
+  <!-- Play Recorded Greeting -->
+  <form id="play_recorded_greeting">
+    <block>
+      <prompt bargein="true">
+        <audio expr="newGreeting"/>
+      </prompt>
+      <goto next="#greeting_review_menu"/>
+    </block>
+  </form>
+
+  <!-- Save New Greeting -->
+  <form id="save_new_greeting">
+    <block>
+      <prompt bargein="true">Your new greeting has been saved and activated.</prompt>
+      <goto next="#greeting_menu"/>
+    </block>
+  </form>
+
+  <!-- Cancel New Greeting -->
+  <form id="cancel_new_greeting">
+    <block>
+      <assign name="greetingCancelled" expr="'true'"/>
+      <clear namelist="newGreeting"/>
+      <prompt bargein="true">Greeting update cancelled.</prompt>
+      <goto next="#greeting_menu"/>
+    </block>
+  </form>
+
+  <!-- Restore System Default Greeting -->
+  <form id="reset_default_greeting">
+    <block>
+      <assign name="resetGreeting" expr="'true'"/>
+      <prompt bargein="true">Your greeting has been restored to the default.</prompt>
+      <goto next="#greeting_menu"/>
+    </block>
+  </form>
+
+  <!-- ============================================== -->
+  <!-- 4. Mailbox Owner Voicemail Inbox Management     -->
+  <!-- ============================================== -->
+  <form id="inbox_menu">
+    <block>
+      <if cond="messageCount == 0">
+        <prompt bargein="true">You have no messages in your inbox.</prompt>
+        <goto next="#owner_portal"/>
+      <else/>
+        <prompt bargein="true">
+          You have <value expr="messageCount"/> messages.
+        </prompt>
+        <goto next="#inbox_actions"/>
+      </if>
+    </block>
+  </form>
+
+  <!-- Inbox Actions Menu -->
+  <menu id="inbox_actions">
+    <prompt bargein="true">
+      To replay messages, press 1.
+      To delete current message, press 3.
+      To return to the main menu, press star.
+    </prompt>
+    <choice dtmf="1" next="#inbox_menu"/>
+    <choice dtmf="3" next="#inbox_delete"/>
+    <choice dtmf="*" next="#owner_portal"/>
+  </menu>
+
+  <form id="inbox_delete">
+    <block>
+      <prompt bargein="true">Message deleted.</prompt>
+      <goto next="#owner_portal"/>
+    </block>
+  </form>
+
+  <!-- Exit Portal -->
+  <form id="portal_exit">
+    <block>
+      <prompt bargein="true">Thank you for using voicemail. Goodbye.</prompt>
+      <exit/>
+    </block>
+  </form>
+
+</vxml>

@@ -68,18 +68,9 @@ public class SipParser {
             }
         }
 
-        byte[] headerBytes;
-        byte[] rawBodyBytes;
-
-        if (bodyStartOffset != -1) {
-            headerBytes = Arrays.copyOfRange(bytes, 0, bodyStartOffset - delimiterLength);
-            rawBodyBytes = Arrays.copyOfRange(bytes, bodyStartOffset, bytes.length);
-        } else {
-            headerBytes = bytes;
-            rawBodyBytes = new byte[0];
-        }
-
-        String headerText = new String(headerBytes, StandardCharsets.UTF_8);
+        String headerText = (bodyStartOffset != -1)
+                ? new String(bytes, 0, bodyStartOffset - delimiterLength, StandardCharsets.UTF_8)
+                : new String(bytes, StandardCharsets.UTF_8);
         List<String> rawLines = splitLines(headerText);
 
         // Skip leading blank lines (RFC 3261 Section 7.3.1)
@@ -171,15 +162,16 @@ public class SipParser {
         }
 
         int contentLength = message.getHeaders().getContentLength();
-        if (contentLength > 0) {
-            int toCopy = Math.min(contentLength, rawBodyBytes.length);
-            message.setBody(Arrays.copyOfRange(rawBodyBytes, 0, toCopy));
-        } else if (rawBodyBytes.length > 0 && message.getHeaders().contains(SipHeaders.CONTENT_LENGTH)) {
+        int availableBody = (bodyStartOffset != -1) ? (bytes.length - bodyStartOffset) : 0;
+        if (contentLength > 0 && availableBody > 0) {
+            int toCopy = Math.min(contentLength, availableBody);
+            message.setBody(Arrays.copyOfRange(bytes, bodyStartOffset, bodyStartOffset + toCopy));
+        } else if (availableBody > 0 && message.getHeaders().contains(SipHeaders.CONTENT_LENGTH)) {
             // Explicit Content-Length: 0
             message.setBody(new byte[0]);
-        } else if (rawBodyBytes.length > 0) {
+        } else if (availableBody > 0) {
             // UDP with omitted Content-Length: whole payload is body
-            message.setBody(rawBodyBytes);
+            message.setBody(Arrays.copyOfRange(bytes, bodyStartOffset, bytes.length));
         }
 
         return message;

@@ -52,7 +52,7 @@ public class RtpDatagramCodec extends MessageToMessageCodec<DatagramPacket, Obje
     @Override
     protected void encode(ChannelHandlerContext ctx, Object msg, List<Object> out) {
         if (msg instanceof RtpOutboundPacket outbound) {
-            ByteBuf buffer = ctx.alloc().buffer(12 + outbound.packet().getPayload().length);
+            ByteBuf buffer = ctx.alloc().buffer(12 + outbound.packet().getPayloadLength());
             outbound.packet().encode(buffer);
             out.add(new DatagramPacket(buffer, outbound.destination()));
         } else if (msg instanceof RtpPacket packet) {
@@ -61,7 +61,7 @@ public class RtpDatagramCodec extends MessageToMessageCodec<DatagramPacket, Obje
                 throw new IllegalArgumentException(
                         "Cannot encode raw RtpPacket without destination address; use RtpOutboundPacket or set defaultRemoteAddress");
             }
-            ByteBuf buffer = ctx.alloc().buffer(12 + packet.getPayload().length);
+            ByteBuf buffer = ctx.alloc().buffer(12 + packet.getPayloadLength());
             packet.encode(buffer);
             out.add(new DatagramPacket(buffer, target));
         } else if (msg instanceof DatagramPacket dp) {

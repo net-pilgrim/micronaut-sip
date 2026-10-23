@@ -47,14 +47,15 @@ public class SipDatagramCodec extends MessageToMessageCodec<DatagramPacket, SipM
     @Override
     protected void encode(ChannelHandlerContext ctx, SipMessage msg, List<Object> out) {
         try {
-            byte[] bytes = encoder.encode(msg);
             InetSocketAddress recipient = msg.getRemoteAddress();
             if (recipient == null) {
                 LOG.error("Cannot encode SIP message: recipient remote address is null");
                 return;
             }
 
-            DatagramPacket packet = new DatagramPacket(Unpooled.wrappedBuffer(bytes), recipient);
+            ByteBuf buffer = ctx.alloc().buffer();
+            encoder.encode(msg, buffer);
+            DatagramPacket packet = new DatagramPacket(buffer, recipient);
             out.add(packet);
         } catch (Exception e) {
             LOG.error("Failed to encode outgoing SIP message: {}", e.getMessage(), e);

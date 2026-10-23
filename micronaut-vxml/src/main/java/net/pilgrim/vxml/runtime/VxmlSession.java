@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * State machine and Form Interpretation Algorithm (FIA) execution engine
@@ -32,14 +33,16 @@ public class VxmlSession implements VxmlInterpreter {
     private static final ScheduledExecutorService TIMER_SCHEDULER = Executors.newScheduledThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors()),
             r -> {
-                Thread t = new Thread(r, "vxml-session-timer");
+                Thread t = new Thread(r, "vxml-timer");
                 t.setDaemon(true);
                 return t;
-            });
+            }
+    );
 
     public enum State {
         READY,
         RUNNING,
+        PLAYING_PROMPT,
         WAITING_FOR_INPUT,
         RECORDING,
         TERMINATED
@@ -152,6 +155,10 @@ public class VxmlSession implements VxmlInterpreter {
     private void initDocumentScope(VxmlDocument doc) {
         documentScope.clear();
         for (VxmlVar var : doc.getVars()) {
+            if (sessionScope.containsKey(var.getName())) {
+                documentScope.put(var.getName(), sessionScope.get(var.getName()));
+                continue;
+            }
             Object val = eval(var.getExpr());
             if (val != null) {
                 documentScope.put(var.getName(), val);
@@ -205,15 +212,16 @@ public class VxmlSession implements VxmlInterpreter {
                 String blockKey = getItemKey(block);
                 executedBlocks.add(blockKey);
 
-                FlowControl control = executeExecutables(block.getExecutables());
-                if (control.isExit()) {
-                    terminate();
-                    return;
-                }
-                if (control.isGoto()) {
-                    handleGoto(control.getGotoTarget());
-                    return;
-                }
+                executeExecutablesAsync(block.getExecutables(), 0, control -> {
+                    if (control.isExit()) {
+                        terminate();
+                    } else if (control.isGoto()) {
+                        handleGoto(control.getGotoTarget());
+                    } else {
+                        runFia();
+                    }
+                });
+                return;
             } else if (nextItem instanceof VxmlField field) {
                 activeField = field;
                 dtmfBuffer.setLength(0);
@@ -305,15 +313,17 @@ public class VxmlSession implements VxmlInterpreter {
                 record.getName(), recordedBytes.length, termChar != null ? termChar : "none", callId);
 
         if (record.getFilled() != null) {
-            FlowControl fc = executeExecutables(record.getFilled().getExecutables());
-            if (fc.isExit()) {
-                terminate();
-                return;
-            }
-            if (fc.isGoto()) {
-                handleGoto(fc.getGotoTarget());
-                return;
-            }
+            executeExecutablesAsync(record.getFilled().getExecutables(), 0, fc -> {
+                if (fc.isExit()) {
+                    terminate();
+                } else if (fc.isGoto()) {
+                    handleGoto(fc.getGotoTarget());
+                } else {
+                    state = State.RUNNING;
+                    runFia();
+                }
+            });
+            return;
         }
 
         state = State.RUNNING;
@@ -408,15 +418,17 @@ public class VxmlSession implements VxmlInterpreter {
             }
 
             if (activeField.getFilled() != null) {
-                FlowControl control = executeExecutables(activeField.getFilled().getExecutables());
-                if (control.isExit()) {
-                    terminate();
-                    return;
-                }
-                if (control.isGoto()) {
-                    handleGoto(control.getGotoTarget());
-                    return;
-                }
+                executeExecutablesAsync(activeField.getFilled().getExecutables(), 0, control -> {
+                    if (control.isExit()) {
+                        terminate();
+                    } else if (control.isGoto()) {
+                        handleGoto(control.getGotoTarget());
+                    } else {
+                        activeField = null;
+                        runFia();
+                    }
+                });
+                return;
             }
 
             activeField = null;
@@ -427,15 +439,16 @@ public class VxmlSession implements VxmlInterpreter {
         } else if (result.isNoMatch()) {
             dtmfBuffer.setLength(0);
             if (activeField.getNoMatch() != null) {
-                FlowControl control = executeExecutables(activeField.getNoMatch().getExecutables());
-                if (control.isExit()) {
-                    terminate();
-                    return;
-                }
-                if (control.isGoto()) {
-                    handleGoto(control.getGotoTarget());
-                    return;
-                }
+                executeExecutablesAsync(activeField.getNoMatch().getExecutables(), 0, control -> {
+                    if (control.isExit()) {
+                        terminate();
+                    } else if (control.isGoto()) {
+                        handleGoto(control.getGotoTarget());
+                    } else {
+                        runFia();
+                    }
+                });
+                return;
             }
             // Reprompt active field
             runFia();
@@ -483,15 +496,17 @@ public class VxmlSession implements VxmlInterpreter {
             }
 
             if (activeField.getFilled() != null) {
-                FlowControl control = executeExecutables(activeField.getFilled().getExecutables());
-                if (control.isExit()) {
-                    terminate();
-                    return;
-                }
-                if (control.isGoto()) {
-                    handleGoto(control.getGotoTarget());
-                    return;
-                }
+                executeExecutablesAsync(activeField.getFilled().getExecutables(), 0, control -> {
+                    if (control.isExit()) {
+                        terminate();
+                    } else if (control.isGoto()) {
+                        handleGoto(control.getGotoTarget());
+                    } else {
+                        activeField = null;
+                        runFia();
+                    }
+                });
+                return;
             }
 
             activeField = null;
@@ -499,15 +514,16 @@ public class VxmlSession implements VxmlInterpreter {
         } else {
             LOG.info("Utterance '{}' did not match active field '{}'", utterance, activeField.getName());
             if (activeField.getNoMatch() != null) {
-                FlowControl control = executeExecutables(activeField.getNoMatch().getExecutables());
-                if (control.isExit()) {
-                    terminate();
-                    return;
-                }
-                if (control.isGoto()) {
-                    handleGoto(control.getGotoTarget());
-                    return;
-                }
+                executeExecutablesAsync(activeField.getNoMatch().getExecutables(), 0, control -> {
+                    if (control.isExit()) {
+                        terminate();
+                    } else if (control.isGoto()) {
+                        handleGoto(control.getGotoTarget());
+                    } else {
+                        runFia();
+                    }
+                });
+                return;
             }
             // Reprompt active field
             runFia();
@@ -559,15 +575,16 @@ public class VxmlSession implements VxmlInterpreter {
             }
             LOG.info("No-input timeout reached for field '{}' (Call-ID: {})", activeField.getName(), callId);
             if (activeField.getNoInput() != null) {
-                FlowControl control = executeExecutables(activeField.getNoInput().getExecutables());
-                if (control.isExit()) {
-                    terminate();
-                    return;
-                }
-                if (control.isGoto()) {
-                    handleGoto(control.getGotoTarget());
-                    return;
-                }
+                executeExecutablesAsync(activeField.getNoInput().getExecutables(), 0, control -> {
+                    if (control.isExit()) {
+                        terminate();
+                    } else if (control.isGoto()) {
+                        handleGoto(control.getGotoTarget());
+                    } else {
+                        runFia();
+                    }
+                });
+                return;
             }
             runFia();
         }
@@ -621,9 +638,22 @@ public class VxmlSession implements VxmlInterpreter {
     }
 
     private FlowControl executeExecutables(List<VxmlExecutable> executables) {
-        if (executables == null) return FlowControl.continueFlow();
+        java.util.concurrent.atomic.AtomicReference<FlowControl> ref =
+                new java.util.concurrent.atomic.AtomicReference<>(FlowControl.continueFlow());
+        executeExecutablesAsync(executables, 0, ref::set);
+        return ref.get();
+    }
 
-        for (VxmlExecutable exec : executables) {
+    private void executeExecutablesAsync(List<VxmlExecutable> executables, int startIndex, Consumer<FlowControl> onComplete) {
+        if (executables == null || startIndex >= executables.size()) {
+            if (onComplete != null) {
+                onComplete.accept(FlowControl.continueFlow());
+            }
+            return;
+        }
+
+        for (int i = startIndex; i < executables.size(); i++) {
+            VxmlExecutable exec = executables.get(i);
             if (exec instanceof VxmlAssign assign) {
                 Object val = eval(assign.getExpr());
                 if (dialogScope.containsKey(assign.getName()) || !documentScope.containsKey(assign.getName())) {
@@ -644,44 +674,59 @@ public class VxmlSession implements VxmlInterpreter {
                     }
                 }
             } else if (exec instanceof VxmlGoto gotoNode) {
-                return FlowControl.gotoTarget(gotoNode.getNext());
+                if (onComplete != null) {
+                    onComplete.accept(FlowControl.gotoTarget(gotoNode.getNext()));
+                }
+                return;
             } else if (exec instanceof VxmlExit || exec instanceof VxmlDisconnect) {
-                return FlowControl.exit();
+                if (onComplete != null) {
+                    onComplete.accept(FlowControl.exit());
+                }
+                return;
+            } else if (exec instanceof VxmlIf ifNode) {
+                List<VxmlExecutable> branchExecs = resolveIfBranch(ifNode);
+                if (!branchExecs.isEmpty()) {
+                    int nextIndex = i + 1;
+                    executeExecutablesAsync(branchExecs, 0, branchFlow -> {
+                        if (branchFlow.isExit() || branchFlow.isGoto()) {
+                            if (onComplete != null) onComplete.accept(branchFlow);
+                        } else {
+                            executeExecutablesAsync(executables, nextIndex, onComplete);
+                        }
+                    });
+                    return;
+                }
             } else if (exec instanceof VxmlPrompt prompt) {
                 byte[] audio = renderPrompts(List.of(prompt));
                 if (audio.length > 0 && media != null) {
-                    CountDownLatch latch = new CountDownLatch(1);
-                    media.playAudio(audio, prompt.isBargeIn(), latch::countDown);
-                    try {
-                        latch.await(5, TimeUnit.SECONDS);
-                    } catch (InterruptedException ignored) {}
-                }
-            } else if (exec instanceof VxmlIf ifNode) {
-                FlowControl fc = executeIf(ifNode);
-                if (fc.isExit() || fc.isGoto()) {
-                    return fc;
+                    int nextIndex = i + 1;
+                    state = State.PLAYING_PROMPT;
+                    media.playAudio(audio, prompt.isBargeIn(), () -> {
+                        if (state != State.TERMINATED) {
+                            state = State.RUNNING;
+                            executeExecutablesAsync(executables, nextIndex, onComplete);
+                        }
+                    });
+                    return;
                 }
             }
         }
-        return FlowControl.continueFlow();
+
+        if (onComplete != null) {
+            onComplete.accept(FlowControl.continueFlow());
+        }
     }
 
-    private FlowControl executeIf(VxmlIf ifNode) {
+    private List<VxmlExecutable> resolveIfBranch(VxmlIf ifNode) {
         if (VxmlExpressionEvaluator.evaluateCondition(ifNode.getCond(), dialogScope, documentScope, sessionScope)) {
-            return executeExecutables(ifNode.getThenExecutables());
+            return ifNode.getThenExecutables();
         }
-
         for (VxmlElseIf elseIf : ifNode.getElseIfs()) {
             if (VxmlExpressionEvaluator.evaluateCondition(elseIf.getCond(), dialogScope, documentScope, sessionScope)) {
-                return executeExecutables(elseIf.getExecutables());
+                return elseIf.getExecutables();
             }
         }
-
-        if (!ifNode.getElseExecutables().isEmpty()) {
-            return executeExecutables(ifNode.getElseExecutables());
-        }
-
-        return FlowControl.continueFlow();
+        return ifNode.getElseExecutables();
     }
 
     private byte[] renderPrompts(List<VxmlPrompt> prompts) {

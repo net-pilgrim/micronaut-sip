@@ -21,16 +21,18 @@ public class RtpAudioPlayer implements Closeable {
     private static final int BYTES_PER_20MS_FRAME = 320; // 160 samples * 2 bytes/sample @ 8 kHz
 
     private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors()),
+            Math.max(4, Runtime.getRuntime().availableProcessors()),
             r -> {
                 Thread t = new Thread(r, "rtp-audio-player");
                 t.setDaemon(true);
                 return t;
-            });
+            }
+    );
 
     private final RtpMediaSession mediaSession;
     private final byte[] audioData;
     private final Runnable onComplete;
+    private final byte[] reusableFrameBuffer = new byte[BYTES_PER_20MS_FRAME];
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean completed = new AtomicBoolean(false);
@@ -74,12 +76,14 @@ public class RtpAudioPlayer implements Closeable {
             int remaining = audioData.length - currentOffset;
             int frameLen = Math.min(BYTES_PER_20MS_FRAME, remaining);
 
-            byte[] frame = new byte[BYTES_PER_20MS_FRAME];
-            System.arraycopy(audioData, currentOffset, frame, 0, frameLen);
+            if (frameLen < BYTES_PER_20MS_FRAME) {
+                java.util.Arrays.fill(reusableFrameBuffer, frameLen, BYTES_PER_20MS_FRAME, (byte) 0);
+            }
+            System.arraycopy(audioData, currentOffset, reusableFrameBuffer, 0, frameLen);
             currentOffset += frameLen;
 
             try {
-                mediaSession.sendAudioFrame(frame, isFirstPacket).subscribe(
+                mediaSession.sendAudioFrame(reusableFrameBuffer, isFirstPacket).subscribe(
                         null,
                         e -> LOG.warn("Error sending RTP frame for Call-ID {}: {}", mediaSession.getCallId(), e.getMessage(), e)
                 );
@@ -103,7 +107,11 @@ public class RtpAudioPlayer implements Closeable {
     }
 
     private void triggerComplete() {
-        stop();
+        if (scheduledFuture != null) {
+            scheduledFuture.cancel(false);
+            scheduledFuture = null;
+        }
+        running.set(false);
         if (completed.compareAndSet(false, true)) {
             if (onComplete != null) {
                 try {

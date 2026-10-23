@@ -17,7 +17,7 @@ public class WebRtcVxmlMedia implements VxmlMedia {
 
     private final WebSocketSession session;
     private volatile boolean bargeInAllowed;
-    private final AtomicReference<AudioStreamThread> activeStream = new AtomicReference<>();
+    private final AtomicReference<AudioStreamTask> activeStream = new AtomicReference<>();
     private final AtomicBoolean recording = new AtomicBoolean();
     private final AtomicReference<ByteBuffer> recordBuffer = new AtomicReference<>();
     private Consumer<Character> dtmfListener;
@@ -35,14 +35,15 @@ public class WebRtcVxmlMedia implements VxmlMedia {
         }
 
         bargeInAllowed = bargeIn;
-        AudioStreamThread stream = new AudioStreamThread(pcmAudio, onFinished);
+        AudioStreamTask stream = new AudioStreamTask(pcmAudio, onFinished);
         activeStream.set(stream);
-        stream.start();
+        Thread vt = Thread.ofVirtual().name("webrtc-vxml-audio-", 0).start(stream);
+        stream.setThread(vt);
     }
 
     @Override
     public void stopAudio() {
-        AudioStreamThread stream = activeStream.getAndSet(null);
+        AudioStreamTask stream = activeStream.getAndSet(null);
         if (stream != null) {
             stream.halt();
         }
@@ -50,7 +51,7 @@ public class WebRtcVxmlMedia implements VxmlMedia {
 
     @Override
     public boolean isAudioPlaying() {
-        AudioStreamThread stream = activeStream.get();
+        AudioStreamTask stream = activeStream.get();
         return stream != null && stream.running.get();
     }
 
@@ -117,33 +118,40 @@ public class WebRtcVxmlMedia implements VxmlMedia {
         }
     }
 
-    private class AudioStreamThread extends Thread {
+    private class AudioStreamTask implements Runnable {
         private final byte[] pcm;
         private final Runnable onFinished;
         private final AtomicBoolean running = new AtomicBoolean(true);
+        private volatile Thread thread;
 
-        AudioStreamThread(byte[] pcm, Runnable onFinished) {
+        AudioStreamTask(byte[] pcm, Runnable onFinished) {
             this.pcm = pcm;
             this.onFinished = onFinished;
-            setDaemon(true);
+        }
+
+        void setThread(Thread thread) {
+            this.thread = thread;
         }
 
         @Override
         public void run() {
             try {
                 int chunkSize = 320; // 20ms at 8kHz
+                byte[] chunk = new byte[chunkSize];
                 for (int offset = 0; offset < pcm.length && running.get(); offset += chunkSize) {
                     int len = Math.min(chunkSize, pcm.length - offset);
-                    byte[] chunk = new byte[len];
-                    System.arraycopy(pcm, offset, chunk, 0, len);
+                    byte[] slice = (len == chunkSize) ? chunk : new byte[len];
+                    System.arraycopy(pcm, offset, slice, 0, len);
 
                     if (session.isOpen()) {
-                        String b64 = Base64.getEncoder().encodeToString(chunk);
-                        session.sendSync("{\"type\":\"audio\",\"data\":\"" + b64 + "\"}");
+                        String b64 = Base64.getEncoder().encodeToString(slice);
+                        session.sendAsync("{\"type\":\"audio\",\"data\":\"" + b64 + "\"}");
                     }
 
                     Thread.sleep(20);
                 }
+            } catch (InterruptedException e) {
+                // Thread interrupted on stop, normal shutdown
             } catch (Exception e) {
                 LOG.warn("Audio streaming error", e);
             } finally {
@@ -154,7 +162,10 @@ public class WebRtcVxmlMedia implements VxmlMedia {
 
         void halt() {
             running.set(false);
-            interrupt();
+            Thread t = thread;
+            if (t != null) {
+                t.interrupt();
+            }
         }
     }
 }

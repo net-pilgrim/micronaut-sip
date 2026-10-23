@@ -14,6 +14,7 @@ import net.pilgrim.vxml.runtime.VxmlSession;
 import net.pilgrim.vxml.speech.TtsClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.pilgrim.sip.util.VirtualThreads;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,6 +55,7 @@ public class MailboxSession {
 
     private VxmlSession vxmlSession;
     private String savedMessageKey;
+    private String savedGreetingKey;
 
     public MailboxSession(String callId,
                           String mailboxOwner,
@@ -79,17 +81,30 @@ public class MailboxSession {
     }
 
     /**
-     * Starts VoiceXML execution of the answering machine dialog.
+     * Starts VoiceXML execution of the answering machine dialog in default deposit mode.
      */
     public synchronized void start(VxmlDocument mailboxDoc,
                                    VxmlDocumentLoader documentLoader,
                                    VxmlAudioLoader audioLoader,
                                    TtsClient ttsClient) {
+        start(mailboxDoc, documentLoader, audioLoader, ttsClient, "deposit");
+    }
+
+    /**
+     * Starts VoiceXML execution of the answering machine dialog with a specified mode.
+     *
+     * @param mode "deposit", "manage", or "greeting"
+     */
+    public synchronized void start(VxmlDocument mailboxDoc,
+                                   VxmlDocumentLoader documentLoader,
+                                   VxmlAudioLoader audioLoader,
+                                   TtsClient ttsClient,
+                                   String mode) {
         if (state != State.READY) {
             return;
         }
         state = State.VXML_RUNNING;
-        LOG.info("Starting VoiceXML-driven answering machine dialog for Call-ID: {}", callId);
+        LOG.info("Starting VoiceXML-driven answering machine dialog for Call-ID: {}, mode: {}", callId, mode);
 
         this.vxmlSession = new VxmlSession(
                 callId,
@@ -102,11 +117,22 @@ public class MailboxSession {
                 this::onVxmlDialogComplete
         );
 
+        String activeMode = mode != null ? mode : "deposit";
+        vxmlSession.setSessionVariable("mode", activeMode);
+
         if (mailboxOwner != null && !mailboxOwner.isBlank()) {
             vxmlSession.setSessionVariable("mailboxOwner", mailboxOwner);
+            vxmlSession.setSessionVariable("greetingUrl", "prov://" + mailboxOwner + "/greeting.wav");
+            vxmlSession.setSessionVariable("hasGreeting", recordingService.hasCustomGreeting(mailboxOwner));
+            int msgCount = recordingService.getOwnerMessageCount(mailboxOwner);
+            vxmlSession.setSessionVariable("messageCount", msgCount);
         } else {
             vxmlSession.setSessionVariable("mailboxOwner", "");
+            vxmlSession.setSessionVariable("greetingUrl", "");
+            vxmlSession.setSessionVariable("hasGreeting", false);
+            vxmlSession.setSessionVariable("messageCount", 0);
         }
+        vxmlSession.setSessionVariable("caller", caller != null ? caller : "anonymous");
 
         vxmlSession.start();
     }
@@ -133,7 +159,7 @@ public class MailboxSession {
      */
     public void onDtmf(char digit) {
         if (vxmlSession != null) {
-            vxmlSession.onDtmf(digit);
+            VirtualThreads.run(() -> vxmlSession.onDtmf(digit));
         }
     }
 
@@ -150,6 +176,40 @@ public class MailboxSession {
      * Extracts recorded audio from the VoiceXML dialog scope (or active recorder) and saves to object storage.
      */
     private void persistRecordedMessage() {
+        // 1. Check if a new greeting was recorded and accepted
+        if (vxmlSession != null) {
+            Object greetingVar = vxmlSession.getDialogScope().get("newGreeting");
+            if (greetingVar instanceof byte[] gBytes && gBytes.length >= 4800) {
+                Object termChar = vxmlSession.getDialogScope().get("newGreeting$.termchar");
+                boolean cancelledGreeting = "*".equals(termChar) || "true".equalsIgnoreCase(String.valueOf(vxmlSession.getDialogScope().get("greetingCancelled")));
+                if (!cancelledGreeting && mailboxOwner != null && !mailboxOwner.isBlank()) {
+                    long gDur = 0;
+                    Object durObj = vxmlSession.getDialogScope().get("newGreeting$.duration");
+                    if (durObj instanceof Number num) gDur = num.longValue();
+                    if (gDur <= 0) gDur = (gBytes.length * 1000L) / 16000L;
+                    AudioRecording gRec = new AudioRecording(callId, gBytes, 8000, 1, gDur);
+                    this.savedGreetingKey = recordingService.storeGreeting(mailboxOwner, gRec);
+                    LOG.info("Persisted new greeting for owner: {} (key: {})", mailboxOwner, savedGreetingKey);
+                }
+            }
+
+            // Check if reset greeting was requested
+            Object resetGreetingFlag = vxmlSession.getDialogScope().get("resetGreeting");
+            if (resetGreetingFlag != null && ("true".equalsIgnoreCase(String.valueOf(resetGreetingFlag)) || Boolean.TRUE.equals(resetGreetingFlag))) {
+                if (mailboxOwner != null && !mailboxOwner.isBlank()) {
+                    recordingService.deleteGreeting(mailboxOwner);
+                    LOG.info("Reset greeting to default for owner: {}", mailboxOwner);
+                }
+            }
+
+            // Check if message deletion was requested (from inbox management)
+            Object delKey = vxmlSession.getDialogScope().get("deletedMessageKey");
+            if (delKey instanceof String keyStr && !keyStr.isBlank()) {
+                recordingService.deleteMessage(keyStr);
+                LOG.info("Deleted voicemail message key: {}", keyStr);
+            }
+        }
+
         if (savedMessageKey != null) {
             return; // Already persisted
         }
@@ -244,6 +304,10 @@ public class MailboxSession {
 
     public String getSavedMessageKey() {
         return savedMessageKey;
+    }
+
+    public String getSavedGreetingKey() {
+        return savedGreetingKey;
     }
 
     public SipRequest getOriginalInvite() {

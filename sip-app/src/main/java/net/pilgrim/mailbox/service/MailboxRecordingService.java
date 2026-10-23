@@ -7,13 +7,17 @@ import io.micronaut.objectstorage.response.UploadResponse;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import net.pilgrim.mailbox.config.MailboxConfiguration;
+import net.pilgrim.mailbox.model.VoicemailMessage;
 import net.pilgrim.sip.model.SipUri;
 import net.pilgrim.sip.rtp.media.AudioRecording;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -28,6 +32,7 @@ public class MailboxRecordingService {
 
     private final ObjectStorageOperations<?, ?, ?> objectStorage;
     private final MailboxConfiguration config;
+    private final Object storageLock = new Object();
 
     @Inject
     public MailboxRecordingService(@Nullable ObjectStorageOperations<?, ?, ?> objectStorage,
@@ -78,14 +83,26 @@ public class MailboxRecordingService {
         byte[] wavBytes = recording.toWavBytes();
 
         if (objectStorage != null) {
-            try {
-                UploadRequest uploadRequest = UploadRequest.fromBytes(wavBytes, key, "audio/wav");
-                UploadResponse<?> response = objectStorage.upload(uploadRequest);
-                LOG.info("Voicemail successfully uploaded to object storage with key: {} ({} bytes)", key, wavBytes.length);
-                return key;
-            } catch (Exception e) {
-                LOG.error("Failed uploading voicemail to object storage with key: {}", key, e);
-                throw new RuntimeException("Object storage upload failed for key: " + key, e);
+            int retries = 3;
+            while (true) {
+                try {
+                    UploadRequest uploadRequest = UploadRequest.fromBytes(wavBytes, key, "audio/wav");
+                    synchronized (storageLock) {
+                        UploadResponse<?> response = objectStorage.upload(uploadRequest);
+                    }
+                    LOG.info("Voicemail successfully uploaded to object storage with key: {} ({} bytes)", key, wavBytes.length);
+                    return key;
+                } catch (Exception e) {
+                    if (--retries > 0) {
+                        LOG.warn("Retrying upload for key {} after error: {}", key, e.getMessage());
+                        try {
+                            Thread.sleep(30 + (long) (Math.random() * 30));
+                        } catch (InterruptedException ignored) {}
+                    } else {
+                        LOG.error("Failed uploading voicemail to object storage with key: {}", key, e);
+                        throw new RuntimeException("Object storage upload failed for key: " + key, e);
+                    }
+                }
             }
         } else {
             LOG.warn("ObjectStorageOperations bean not present, simulated storage of key: {}", key);
@@ -95,6 +112,137 @@ public class MailboxRecordingService {
 
     public String storeMessage(String callId, String caller, AudioRecording recording) {
         return storeMessage(callId, null, caller, recording);
+    }
+
+    /**
+     * Stores a custom greeting for a mailbox owner into object storage at:
+     *   <mailboxOwner>/greeting.wav
+     */
+    public String storeGreeting(String mailboxOwner, AudioRecording recording) {
+        if (mailboxOwner == null || mailboxOwner.isBlank() || recording == null || recording.getPcmData().length == 0) {
+            LOG.warn("Cannot store greeting: invalid owner or empty recording");
+            return null;
+        }
+
+        String prefix = config.getStoragePrefix() != null ? config.getStoragePrefix().trim() : "";
+        if (!prefix.isEmpty() && !prefix.endsWith("/")) {
+            prefix = prefix + "/";
+        }
+
+        String cleanOwner = sanitizeKeyComponent(mailboxOwner.trim());
+        String key = prefix + cleanOwner + "/greeting.wav";
+
+        LOG.info("Storing custom greeting for owner: {} at key: {}, duration: {}ms",
+                cleanOwner, key, recording.getDurationMs());
+
+        byte[] wavBytes = recording.toWavBytes();
+
+        if (objectStorage != null) {
+            int retries = 3;
+            while (true) {
+                try {
+                    UploadRequest uploadRequest = UploadRequest.fromBytes(wavBytes, key, "audio/wav");
+                    synchronized (storageLock) {
+                        objectStorage.upload(uploadRequest);
+                    }
+                    LOG.info("Custom greeting uploaded to object storage with key: {} ({} bytes)", key, wavBytes.length);
+                    return key;
+                } catch (Exception e) {
+                    if (--retries > 0) {
+                        LOG.warn("Retrying greeting upload for key {} after error: {}", key, e.getMessage());
+                        try {
+                            Thread.sleep(30 + (long) (Math.random() * 30));
+                        } catch (InterruptedException ignored) {}
+                    } else {
+                        LOG.error("Failed uploading greeting to object storage with key: {}", key, e);
+                        throw new RuntimeException("Object storage upload failed for key: " + key, e);
+                    }
+                }
+            }
+        } else {
+            LOG.warn("ObjectStorageOperations bean not present, simulated greeting storage of key: {}", key);
+            return key;
+        }
+    }
+
+    /**
+     * Retrieves the custom greeting audio for a mailbox owner, if configured.
+     */
+    public Optional<byte[]> retrieveGreeting(String mailboxOwner) {
+        if (mailboxOwner == null || mailboxOwner.isBlank()) {
+            return Optional.empty();
+        }
+        String prefix = config.getStoragePrefix() != null ? config.getStoragePrefix().trim() : "";
+        if (!prefix.isEmpty() && !prefix.endsWith("/")) {
+            prefix = prefix + "/";
+        }
+        String cleanOwner = sanitizeKeyComponent(mailboxOwner.trim());
+        return retrieveMessage(prefix + cleanOwner + "/greeting.wav");
+    }
+
+    /**
+     * Checks whether a custom greeting exists for a mailbox owner.
+     */
+    public boolean hasCustomGreeting(String mailboxOwner) {
+        return retrieveGreeting(mailboxOwner).isPresent();
+    }
+
+    /**
+     * Deletes the custom greeting for a mailbox owner (reverting to system default).
+     */
+    public boolean deleteGreeting(String mailboxOwner) {
+        if (mailboxOwner == null || mailboxOwner.isBlank()) {
+            return false;
+        }
+        String prefix = config.getStoragePrefix() != null ? config.getStoragePrefix().trim() : "";
+        if (!prefix.isEmpty() && !prefix.endsWith("/")) {
+            prefix = prefix + "/";
+        }
+        String cleanOwner = sanitizeKeyComponent(mailboxOwner.trim());
+        return deleteMessage(prefix + cleanOwner + "/greeting.wav");
+    }
+
+    /**
+     * Lists all voicemail messages for a specific mailbox owner, sorted by timestamp ascending.
+     */
+    public List<VoicemailMessage> listMessagesForOwner(String mailboxOwner) {
+        if (mailboxOwner == null || mailboxOwner.isBlank()) {
+            return Collections.emptyList();
+        }
+        String cleanOwner = sanitizeKeyComponent(mailboxOwner.trim());
+        String ownerPrefix = cleanOwner + "/";
+        String prefix = config.getStoragePrefix() != null ? config.getStoragePrefix().trim() : "";
+        if (!prefix.isEmpty() && !prefix.endsWith("/")) {
+            ownerPrefix = prefix + ownerPrefix;
+        }
+
+        Set<String> allKeys = listMessages();
+        List<VoicemailMessage> messages = new ArrayList<>();
+
+        for (String key : allKeys) {
+            if (key.startsWith(ownerPrefix) && !key.endsWith("greeting.wav") && key.endsWith(".wav")) {
+                String sub = key.substring(ownerPrefix.length());
+                String[] parts = sub.split("/");
+                if (parts.length == 2) {
+                    String caller = parts[0];
+                    String tstampStr = parts[1].substring(0, parts[1].length() - 4);
+                    try {
+                        long tstamp = Long.parseLong(tstampStr);
+                        messages.add(new VoicemailMessage(key, cleanOwner, caller, tstamp, 0));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+
+        messages.sort(Comparator.comparingLong(VoicemailMessage::timestamp));
+        return messages;
+    }
+
+    /**
+     * Gets the count of messages currently stored for an owner.
+     */
+    public int getOwnerMessageCount(String mailboxOwner) {
+        return listMessagesForOwner(mailboxOwner).size();
     }
 
     /**

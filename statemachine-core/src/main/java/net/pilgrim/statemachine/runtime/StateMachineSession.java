@@ -23,11 +23,8 @@ public class StateMachineSession {
 
     private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors()),
-            r -> {
-                Thread t = new Thread(r, "statemachine-scheduler");
-                t.setDaemon(true);
-                return t;
-            });
+            Thread.ofVirtual().name("statemachine-v-", 0).factory()
+    );
 
     private final String sessionId;
     private final StateMachineDefinition definition;

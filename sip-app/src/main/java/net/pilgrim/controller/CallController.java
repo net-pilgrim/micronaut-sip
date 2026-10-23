@@ -340,9 +340,12 @@ public class CallController extends BaseSipController {
                 RtpMediaSession mediaSession = mediaSessionOpt.get();
                 mediaSession.setRemoteAddress(new InetSocketAddress(InetAddress.getByName(host), audio.getPort()));
                 mediaSession.setCodec(selectedCodec);
-                mediaSession.sendAudioFrame(silencePcm16Le, true).block(Duration.ofSeconds(2));
-                LOG.info("Sent Netty RTP probe frame (codec={} pt={} {}:{}) for Call-ID: {}",
-                        selectedCodec.name(), selectedCodec.payloadType(), host, audio.getPort(), callId);
+                mediaSession.sendAudioFrame(silencePcm16Le, true).subscribe(
+                        null,
+                        e -> LOG.warn("Failed to send Netty RTP probe frame for Call-ID: {}", callId, e),
+                        () -> LOG.info("Sent Netty RTP probe frame (codec={} pt={} {}:{}) for Call-ID: {}",
+                                selectedCodec.name(), selectedCodec.payloadType(), host, audio.getPort(), callId)
+                );
                 return;
             } catch (Exception e) {
                 LOG.warn("Failed to send Netty RTP probe frame for Call-ID: {}, falling back", callId, e);

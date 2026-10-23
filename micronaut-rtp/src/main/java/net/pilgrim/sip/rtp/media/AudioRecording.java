@@ -63,19 +63,35 @@ public class AudioRecording {
     }
 
     /**
-     * Saves the recording to disk in standard WAV format.
+     * Converts the recorded PCM audio into a zero-copy composite Netty {@link io.netty.buffer.ByteBuf}.
      */
-    public void saveWav(Path path) throws IOException {
-        Objects.requireNonNull(path, "path cannot be null");
-        Files.write(path, toWavBytes());
+    public io.netty.buffer.ByteBuf toWavByteBuf() {
+        byte[] header = createWavHeader(pcmData.length, sampleRate, channels, 16);
+        return io.netty.buffer.Unpooled.wrappedBuffer(header, pcmData);
     }
 
     /**
-     * Writes the recording to the specified output stream in standard WAV format.
+     * Saves the recording to disk in standard WAV format using zero-copy NIO gathering write.
+     */
+    public void saveWav(Path path) throws IOException {
+        Objects.requireNonNull(path, "path cannot be null");
+        byte[] header = createWavHeader(pcmData.length, sampleRate, channels, 16);
+        try (var channel = java.nio.channels.FileChannel.open(path,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)) {
+            channel.write(new java.nio.ByteBuffer[]{java.nio.ByteBuffer.wrap(header), java.nio.ByteBuffer.wrap(pcmData)});
+        }
+    }
+
+    /**
+     * Writes the recording to the specified output stream in standard WAV format without intermediate allocation.
      */
     public void writeWav(OutputStream out) throws IOException {
         Objects.requireNonNull(out, "out cannot be null");
-        out.write(toWavBytes());
+        byte[] header = createWavHeader(pcmData.length, sampleRate, channels, 16);
+        out.write(header);
+        out.write(pcmData);
     }
 
     /**
