@@ -1,0 +1,52 @@
+# Janus configuration for SIP/VXML integration
+general: {
+	configs_folder = "/opt/janus/etc/janus"
+	plugins_folder = "/opt/janus/lib/janus/plugins"
+	transports_folder = "/opt/janus/lib/janus/transports"
+	events_folder = "/opt/janus/lib/janus/events"
+	loggers_folder = "/opt/janus/lib/janus/loggers"
+
+	# Enable stdout logging for debugging
+	log_to_stdout = true
+	debug_level = 5  # Verbose logging
+
+	# Interface to bind to
+	interface = "127.0.0.1"
+
+	# API settings
+	api_secret = ""
+	token_auth = false
+}
+
+# NAT traversal settings
+nat: {
+	# Use Google's STUN server for NAT traversal
+	stun_server = "stun.l.google.com"
+	stun_port = 19302
+
+	# ICE settings
+	ice_lite = false
+	ice_tcp = true
+
+	# If behind NAT, you may need to set these
+	# nat_1_1_mapping = "external.ip.address"
+}
+
+# Media settings
+media: {
+	# RTP port range
+	rtp_port_range = "20000-40000"
+
+	# Enable IPv6
+	ipv6 = false
+}
+
+# Transport settings
+transports: {
+	# We'll use WebSocket transport for browser connections
+}
+
+# Plugin settings
+plugins: {
+	# SIP plugin will be configured separately
+}

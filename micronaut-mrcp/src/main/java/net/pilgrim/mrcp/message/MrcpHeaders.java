@@ -150,7 +150,23 @@ public class MrcpHeaders implements Iterable<Map.Entry<String, String>> {
     }
 
     public void setContentType(String contentType) {
-        set(CONTENT_TYPE, contentType);
+        if (contentType != null) {
+            set(CONTENT_TYPE, contentType);
+        } else {
+            remove(CONTENT_TYPE);
+        }
+    }
+
+    public String getContentId() {
+        return get(CONTENT_ID);
+    }
+
+    public void setContentId(String contentId) {
+        if (contentId != null) {
+            set(CONTENT_ID, contentId);
+        } else {
+            remove(CONTENT_ID);
+        }
     }
 
     public int getContentLength() {

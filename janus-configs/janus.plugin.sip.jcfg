@@ -1,0 +1,29 @@
+# Janus SIP Plugin configuration for VXML integration
+general: {
+	# Bind to localhost for SIP signaling
+	local_ip = "127.0.0.1"
+
+	# Use same IP for media
+	local_media_ip = "127.0.0.1"
+
+	# Advertise localhost in SDP
+	sdp_ip = "127.0.0.1"
+
+	# Keep-alive interval (seconds) - 0 to disable
+	keepalive_interval = 120
+
+	# Not behind NAT in localhost setup
+	behind_nat = false
+
+	# User-Agent string
+	user_agent = "Janus WebRTC Gateway"
+
+	# Registration expiration
+	register_ttl = 3600
+
+	# DSCP marking for RTP packets (optional)
+	#dscp_audio_rtp = 46
+}
+
+# You can pre-configure SIP accounts here, but for our use case
+# we'll configure them dynamically via the Janus API

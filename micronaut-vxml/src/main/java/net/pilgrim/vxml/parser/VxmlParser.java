@@ -6,7 +6,13 @@ import org.xml.sax.InputSource;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
 import java.io.StringReader;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -148,6 +154,7 @@ public class VxmlParser {
                 case "prompt" -> prompts.add(parsePrompt(el));
                 case "grammar" -> grammars.add(parseGrammar(el));
                 case "choice" -> choices.add(parseChoice(el));
+                case "option" -> choices.add(parseOption(el));
                 case "filled" -> filled = parseFilled(el);
                 case "noinput" -> noInput = parseNoInput(el);
                 case "nomatch" -> noMatch = parseNoMatch(el);
@@ -364,12 +371,56 @@ public class VxmlParser {
         return new VxmlClear(namelist);
     }
 
+    private VxmlChoice parseOption(Element optionEl) {
+        String dtmf = getAttribute(optionEl, "dtmf", null);
+        String value = getAttribute(optionEl, "value", null);
+        String text = optionEl.getTextContent() != null ? optionEl.getTextContent().trim() : "";
+        if (value == null || value.isBlank()) {
+            value = text;
+        }
+        if (dtmf == null && !value.isBlank() && Character.isDigit(value.charAt(0))) {
+            dtmf = value;
+        }
+        return new VxmlChoice(dtmf, null, null, null, value);
+    }
+
     private VxmlGrammar parseGrammar(Element grammarEl) {
-        String mode = getAttribute(grammarEl, "mode", "dtmf");
+        String mode = getAttribute(grammarEl, "mode", null);
         String type = getAttribute(grammarEl, "type", null);
         String src = getAttribute(grammarEl, "src", null);
-        String inline = grammarEl.getTextContent() != null ? grammarEl.getTextContent().trim() : null;
-        return new VxmlGrammar(mode, type, src, inline);
+        String root = getAttribute(grammarEl, "root", null);
+        String xmlLang = getAttribute(grammarEl, "xml:lang", getAttribute(grammarEl, "lang", null));
+        String version = getAttribute(grammarEl, "version", null);
+
+        String inline = null;
+        if (hasChildElements(grammarEl)) {
+            inline = serializeElement(grammarEl);
+        } else if (grammarEl.getTextContent() != null && !grammarEl.getTextContent().isBlank()) {
+            inline = grammarEl.getTextContent().trim();
+        }
+        return new VxmlGrammar(mode, type, src, inline, root, xmlLang, version);
+    }
+
+    private boolean hasChildElements(Element el) {
+        NodeList children = el.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i).getNodeType() == Node.ELEMENT_NODE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String serializeElement(Element element) {
+        try {
+            Transformer transformer = TransformerFactory.newInstance().newTransformer();
+            transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
+            StringWriter writer = new StringWriter();
+            transformer.transform(new DOMSource(element), new StreamResult(writer));
+            return writer.toString().trim();
+        } catch (Exception e) {
+            return element.getTextContent();
+        }
     }
 
     private String getLocalTagName(Element el) {

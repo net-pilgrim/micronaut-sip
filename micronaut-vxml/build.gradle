@@ -20,6 +20,9 @@ dependencies {
     compileOnly("io.micronaut:micronaut-context")
     compileOnly("io.micronaut.objectstorage:micronaut-object-storage-core")
 
+    // RTP support for RtpVxmlMedia
+    compileOnly(project(":micronaut-rtp"))
+
     testImplementation(platform("org.junit:junit-bom:5.12.2"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testImplementation("io.projectreactor:reactor-test")

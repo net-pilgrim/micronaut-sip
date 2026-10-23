@@ -13,7 +13,10 @@ import reactor.core.publisher.Mono;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -38,6 +41,7 @@ public class SpeechRecognizerResource implements MrcpResource {
     private final AtomicReference<Consumer<MrcpEvent>> currentEventSink = new AtomicReference<>();
 
     private final ByteArrayOutputStream manualAudioBuffer = new ByteArrayOutputStream();
+    private final ConcurrentMap<String, String> definedGrammars = new ConcurrentHashMap<>();
 
     private volatile String activeGrammar = "";
     private volatile String defaultLanguage = "en-US";
@@ -85,6 +89,10 @@ public class SpeechRecognizerResource implements MrcpResource {
 
         if (method == MrcpMethod.RECOGNIZE || "RECOGNIZE".equalsIgnoreCase(methodName)) {
             return handleRecognize(request, eventSink);
+        } else if (method == MrcpMethod.DEFINE_GRAMMAR || "DEFINE-GRAMMAR".equalsIgnoreCase(methodName)) {
+            return handleDefineGrammar(request);
+        } else if (method == MrcpMethod.INTERPRET || "INTERPRET".equalsIgnoreCase(methodName)) {
+            return handleInterpret(request);
         } else if (method == MrcpMethod.STOP || "STOP".equalsIgnoreCase(methodName)) {
             return handleStop(request);
         } else if (method == MrcpMethod.START_INPUT_TIMERS || "START-INPUT-TIMERS".equalsIgnoreCase(methodName)) {
@@ -110,7 +118,14 @@ public class SpeechRecognizerResource implements MrcpResource {
 
         String body = request.getBodyAsString();
         if (body != null && !body.isBlank()) {
-            this.activeGrammar = body.trim();
+            String trimmedBody = body.trim();
+            if (definedGrammars.containsKey(trimmedBody)) {
+                this.activeGrammar = definedGrammars.get(trimmedBody);
+            } else if (trimmedBody.startsWith("session:") && definedGrammars.containsKey(trimmedBody.substring(8))) {
+                this.activeGrammar = definedGrammars.get(trimmedBody.substring(8));
+            } else {
+                this.activeGrammar = trimmedBody;
+            }
         }
 
         String lang = request.getHeaders().getSpeechLanguage();
@@ -135,6 +150,35 @@ public class SpeechRecognizerResource implements MrcpResource {
         }
 
         return Mono.just(inProgressResponse);
+    }
+
+    private Mono<MrcpResponse> handleDefineGrammar(MrcpRequest request) {
+        String body = request.getBodyAsString();
+        String contentId = request.getHeaders().getContentId();
+        if (contentId == null || contentId.isBlank()) {
+            contentId = "default";
+        }
+        if (body != null && !body.isBlank()) {
+            String trimmed = body.trim();
+            definedGrammars.put(contentId, trimmed);
+            if (contentId.startsWith("session:")) {
+                definedGrammars.put(contentId.substring(8), trimmed);
+            } else {
+                definedGrammars.put("session:" + contentId, trimmed);
+            }
+            this.activeGrammar = trimmed;
+        }
+        return Mono.just(request.createResponse(MrcpStatusCode.SUCCESS, MrcpRequestState.COMPLETE));
+    }
+
+    private Mono<MrcpResponse> handleInterpret(MrcpRequest request) {
+        String body = request.getBodyAsString();
+        String text = body != null ? body.trim() : "";
+        MistralRecognitionResult result = new MistralRecognitionResult(text, 1.0f, defaultLanguage, Collections.emptyList());
+        MrcpResponse resp = request.createResponse(MrcpStatusCode.SUCCESS, MrcpRequestState.COMPLETE);
+        resp.getHeaders().setContentType("application/nlsml+xml");
+        resp.setBody(result.toNlsml(), "application/nlsml+xml");
+        return Mono.just(resp);
     }
 
     /**
@@ -180,7 +224,11 @@ public class SpeechRecognizerResource implements MrcpResource {
         return mistralClient.recognize(audioData, activeGrammar, defaultLanguage)
                 .doOnNext(result -> {
                     this.lastResult = result;
-                    emitRecognitionComplete(reqId, result, eventSink);
+                    if (result != null && result.getConfidence() >= confidenceThreshold && result.getText() != null && !result.getText().isBlank()) {
+                        emitRecognitionComplete(reqId, result, eventSink);
+                    } else {
+                        emitRecognitionFailed(reqId, eventSink);
+                    }
                 })
                 .doOnError(error -> {
                     LOG.error("Failed to recognize speech via Mistral: {}", error.getMessage(), error);

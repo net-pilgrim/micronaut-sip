@@ -40,12 +40,35 @@ public interface VxmlMedia {
     boolean isBargeInAllowed();
 
     /**
+     * Displays a video frame to the user.
+     *
+     * @param imageData JPEG or PNG encoded image bytes
+     * @param mimeType  MIME type ("image/jpeg" or "image/png")
+     */
+    default void showVideo(byte[] imageData, String mimeType) {
+    }
+
+    /**
+     * Clears the video display.
+     */
+    default void clearVideo() {
+    }
+
+    /**
      * Registers a listener for DTMF digits detected on the media stream.
      *
      * @param listener consumer receiving DTMF digit characters
      */
     default void setDtmfListener(Consumer<Character> listener) {
         // Optional hook for media providers detecting inband DTMF
+    }
+
+    /**
+     * Registers a listener for inbound audio frames detected on the media stream.
+     *
+     * @param listener consumer receiving PCM audio bytes
+     */
+    default void setAudioInputListener(Consumer<byte[]> listener) {
     }
 
     /**

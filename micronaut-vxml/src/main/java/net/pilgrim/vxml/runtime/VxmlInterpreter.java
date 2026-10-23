@@ -29,6 +29,21 @@ public interface VxmlInterpreter {
     void onDtmf(char digit);
 
     /**
+     * Handles inbound speech recognition utterances (e.g. from ASR or speech input event).
+     *
+     * @param utterance recognized speech utterance string
+     */
+    void onSpeech(String utterance);
+
+    /**
+     * Feeds inbound PCM audio bytes for automated speech recognition.
+     *
+     * @param pcmAudio captured 8000 Hz 16-bit mono signed PCM bytes
+     */
+    default void onAudioInput(byte[] pcmAudio) {
+    }
+
+    /**
      * Terminates dialog execution and cleans up resources.
      */
     void terminate();

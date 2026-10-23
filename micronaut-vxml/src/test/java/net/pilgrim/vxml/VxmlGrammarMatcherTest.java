@@ -110,4 +110,69 @@ public class VxmlGrammarMatcherTest {
         assertTrue(r2.isMatch());
         assertEquals("billing", r2.getValue());
     }
+
+    @Test
+    void testSrgsVoiceMatching() {
+        String srgs = """
+                <grammar type="application/srgs+xml" mode="voice" root="service">
+                  <rule id="service" scope="public">
+                    <one-of>
+                      <item>technical support <tag>tech_support</tag></item>
+                      <item>customer service <tag>cust_service</tag></item>
+                      <item>sales <tag>sales</tag></item>
+                    </one-of>
+                  </rule>
+                </grammar>
+                """;
+        VxmlGrammar grammar = new VxmlGrammar("voice", "application/srgs+xml", null, srgs);
+        VxmlField field = new VxmlField("serviceField", null, null, null, null, List.of(), List.of(grammar), List.of(), null, null, null);
+
+        GrammarMatchResult r1 = matcher.matchVoice(field, "technical support");
+        assertTrue(r1.isMatch());
+        assertEquals("tech_support", r1.getValue());
+
+        GrammarMatchResult r2 = matcher.matchVoice(field, "CUSTOMER SERVICE");
+        assertTrue(r2.isMatch());
+        assertEquals("cust_service", r2.getValue());
+
+        GrammarMatchResult r3 = matcher.matchVoice(field, "billing");
+        assertTrue(r3.isNoMatch());
+    }
+
+    @Test
+    void testBuiltinVoiceBooleanAndDigits() {
+        VxmlField boolField = new VxmlField("confirm", null, null, "boolean", null, List.of(), List.of(), List.of(), null, null, null);
+
+        GrammarMatchResult rYes = matcher.matchVoice(boolField, "yes");
+        assertTrue(rYes.isMatch());
+        assertEquals("true", rYes.getValue());
+
+        GrammarMatchResult rNo = matcher.matchVoice(boolField, "no");
+        assertTrue(rNo.isMatch());
+        assertEquals("false", rNo.getValue());
+
+        VxmlField digitField = new VxmlField("pin", null, null, "digits", null, List.of(), List.of(), List.of(), null, null, null);
+        GrammarMatchResult rDigits = matcher.matchVoice(digitField, "one two three four");
+        assertTrue(rDigits.isMatch());
+        assertEquals("1234", rDigits.getValue());
+    }
+
+    @Test
+    void testOptionChoicesMatching() {
+        VxmlChoice opt1 = new VxmlChoice("1", "#form1", null, null, "FirstOption");
+        VxmlChoice opt2 = new VxmlChoice("2", "#form2", null, null, "SecondOption");
+        VxmlField field = new VxmlField("roomOpt", null, null, null, null, List.of(), List.of(), List.of(opt1, opt2), null, null, null);
+
+        // DTMF match
+        GrammarMatchResult dtmfRes = matcher.match(field, "1");
+        assertTrue(dtmfRes.isMatch());
+        assertEquals("1", dtmfRes.getValue());
+        assertEquals("#form1", dtmfRes.getNextTarget());
+
+        // Voice match
+        GrammarMatchResult voiceRes = matcher.matchVoice(field, "FirstOption");
+        assertTrue(voiceRes.isMatch());
+        assertEquals("FirstOption", voiceRes.getValue());
+        assertEquals("#form1", voiceRes.getNextTarget());
+    }
 }

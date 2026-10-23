@@ -1,0 +1,29 @@
+# WebSocket transport for Janus
+general: {
+	# Enable JSON and binary
+	json = "indented"
+
+	# WebSocket server settings
+	ws = true
+	ws_port = 8188
+	ws_interface = "127.0.0.1"
+
+	# Secure WebSocket (for production)
+	#wss = true
+	#wss_port = 8989
+	#wss_interface = "0.0.0.0"
+
+	# SSL certificates (for wss)
+	#wss_certs_dir = "/path/to/certs"
+
+	# WebSocket logging
+	ws_logging = "debug"
+
+	# Ping/pong for keep-alive
+	ws_ping_pong_trigger = 30
+}
+
+# Admin API
+admin: {
+	admin_ws = false
+}

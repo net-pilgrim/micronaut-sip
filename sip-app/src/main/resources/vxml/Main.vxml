@@ -1,0 +1,341 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vxml version="2.1" xmlns="http://www.w3.org/2001/vxml">
+  <var name="sword" expr="'false'"/>
+  <var name="spellpower" expr="0"/>
+
+  <form id="Entry1">
+    <block>
+      <goto next="#Prompt1"/>
+    </block>
+  </form>
+
+  <!-- Opening video -->
+  <form id="Prompt1">
+    <block>
+      <prompt bargein="true">
+        <audio src="classpath:vxml/titles.webm"/>
+      </prompt>
+      <goto next="#Room1"/>
+    </block>
+  </form>
+
+  <!-- Room 1: Castle entrance with 3 doors -->
+  <form id="Room1">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room1Option">
+      <prompt bargein="true">
+        You are in a castle. There are three doors in front of you.
+        Press 1 for left door. Press 2 for front door. Or press 3 for right door.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+      <option dtmf="3" value="3"/>
+      <filled>
+        <if cond="Room1Option == '1'">
+          <goto next="#Room2"/>
+        <elseif cond="Room1Option == '2'"/>
+          <goto next="#Room3"/>
+        <else/>
+          <goto next="#Room4"/>
+        </if>
+      </filled>
+    </field>
+  </form>
+
+  <!-- Room 2: Goblin with sword -->
+  <form id="Room2">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room2Option">
+      <prompt>
+        <audio src="classpath:vxml/dungeon.webm"/>
+        You entered a room. There is a goblin inside offering you an enchanted sword.
+        For you to have the sword you must answer: Is pi greater than three?
+        Press 1 for true or 2 for false.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+    </field>
+    <filled>
+      <if cond="Room2Option == '1'">
+        <goto next="#haveSword"/>
+      <else/>
+        <goto next="#Prompt3"/>
+      </if>
+    </filled>
+  </form>
+
+  <form id="haveSword">
+    <block>
+      <prompt bargein="true">
+        <audio src="classpath:vxml/goblinGetSword.webm"/>
+        You got the enchanted sword!
+      </prompt>
+      <assign name="sword" expr="'true'"/>
+      <goto next="#Room1"/>
+    </block>
+  </form>
+
+  <form id="Prompt3">
+    <block>
+      <prompt bargein="true">
+        Wrong answer! You return empty handed.
+      </prompt>
+      <goto next="#Room1"/>
+    </block>
+  </form>
+
+  <!-- Room 3: Graffiti room -->
+  <form id="Room3">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room3Option">
+      <prompt>
+        This room is full of graffiti. The warlock's son is a street artist.
+        There are three doors. The center and right doors say "Do Not Enter" in green elven blood.
+        Choose your door: 1 for left, 2 for front, 3 for right.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+      <option dtmf="3" value="3"/>
+    </field>
+    <filled>
+      <if cond="Room3Option == '1'">
+        <goto next="#BadChoice"/>
+      <elseif cond="Room3Option == '2'"/>
+        <goto next="#Room5"/>
+      <else/>
+        <goto next="#Room6"/>
+      </if>
+    </filled>
+  </form>
+
+  <form id="BadChoice">
+    <block>
+      <prompt bargein="true">
+        Bad choice! You are trapped!
+      </prompt>
+      <goto next="#GameOver"/>
+    </block>
+  </form>
+
+  <!-- Room 5: Two doors -->
+  <form id="Room5">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room5Option">
+      <prompt>
+        In this room you have two doors. One on the left and another on the right.
+        Press 1 for left or 3 for right.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="3" value="3"/>
+    </field>
+    <filled>
+      <if cond="Room5Option == '1'">
+        <goto next="#GameOver"/>
+      <else/>
+        <goto next="#Room7_entry"/>
+      </if>
+    </filled>
+  </form>
+
+  <!-- Room 6: Shrine of luck -->
+  <form id="Room6">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room6Option">
+      <prompt>
+        You are in a room with only two exits. It looks like a shrine for luck.
+        There are images of dice, poker, blackjack. Both doors are marked 50 percent.
+        Press 1 for left or 2 for front.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+    </field>
+    <filled>
+      <if cond="Room6Option == '1'">
+        <goto next="#GameOver"/>
+      <else/>
+        <goto next="#Room7_entry"/>
+      </if>
+    </filled>
+  </form>
+
+  <!-- Room 7 entry: Ogre encounter -->
+  <form id="Room7_entry">
+    <block>
+      <prompt bargein="true">
+        In this room you have found an evil ogre. He attacks you!
+      </prompt>
+      <goto next="#Branching1"/>
+    </block>
+  </form>
+
+  <form id="Branching1">
+    <block>
+      <if cond="sword == 'true'">
+        <goto next="#OrcWin"/>
+      <else/>
+        <goto next="#OrcLoose"/>
+      </if>
+    </block>
+  </form>
+
+  <form id="OrcWin">
+    <block>
+      <prompt bargein="true">
+        <audio src="classpath:vxml/ogreFightWin.webm"/>
+        You have fought fiercely and finally you won!
+      </prompt>
+      <goto next="#Room7"/>
+    </block>
+  </form>
+
+  <form id="OrcLoose">
+    <block>
+      <prompt bargein="true">
+        <audio src="classpath:vxml/ogreFightLoose.webm"/>
+        You fought fiercely but without any weapon you lost...
+      </prompt>
+      <goto next="#GameOver"/>
+    </block>
+  </form>
+
+  <!-- Room 7: Three doors after ogre -->
+  <form id="Room7">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room7Option">
+      <prompt>
+        You have entered a room with three doors. They are marked: WC on left, Princess in front and right.
+        Choose carefully your destiny. Press 1 for left, 2 for front, 3 for right.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+      <option dtmf="3" value="3"/>
+    </field>
+    <filled>
+      <if cond="Room7Option == '1'">
+        <goto next="#Abyss"/>
+      <elseif cond="Room7Option == '2'"/>
+        <goto next="#Room9"/>
+      <else/>
+        <goto next="#Room8"/>
+      </if>
+    </filled>
+  </form>
+
+  <form id="Abyss">
+    <block>
+      <prompt bargein="true">
+        You have fallen into an abyss! You lost!
+      </prompt>
+      <goto next="#GameOver"/>
+    </block>
+  </form>
+
+  <!-- Room 8: Beauty contest -->
+  <form id="Room8">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room8Option">
+      <prompt>
+        A fairy organizes a male beauty contest. Help her choose the most handsome and brave.
+        Press 1 for Bruce Lee, 2 for Van Damme, 3 for Chuck Norris.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+      <option dtmf="3" value="3"/>
+    </field>
+    <filled>
+      <if cond="Room8Option == '3'">
+        <assign name="spellpower" expr="10"/>
+        <prompt>Chuck Norris! The fairy is pleased and gives you magic power!</prompt>
+      <else/>
+        <prompt>Wrong choice, but the fairy lets you pass.</prompt>
+      </if>
+      <goto next="#Room9"/>
+    </filled>
+  </form>
+
+  <!-- Room 9: Princess encounter -->
+  <form id="Room9">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room9Option">
+      <prompt>
+        <audio src="classpath:vxml/princess.webm"/>
+        You meet a princess! But wait, she is guarded by an evil prince!
+        Press 1 to fight with sword, 2 to use magic.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+    </field>
+    <filled>
+      <if cond="Room9Option == '1' &amp;&amp; sword == 'true'">
+        <goto next="#Finish"/>
+      <elseif cond="Room9Option == '2' &amp;&amp; spellpower >= 10"/>
+        <goto next="#Finish"/>
+      <else/>
+        <goto next="#GameOver"/>
+      </if>
+    </filled>
+  </form>
+
+  <!-- Room 4: Alternative path prince -->
+  <form id="Room4">
+    <property name="inputmodes" value="dtmf"/>
+    <property name="bargein" value="true"/>
+    <field name="Room4Option">
+      <prompt>
+        <audio src="classpath:vxml/prince.webm"/>
+        You meet an evil prince directly! You must fight!
+        Press 1 to use sword, 2 to use magic.
+      </prompt>
+      <option dtmf="1" value="1"/>
+      <option dtmf="2" value="2"/>
+    </field>
+    <filled>
+      <if cond="Room4Option == '1' &amp;&amp; sword == 'true'">
+        <prompt>
+          <audio src="classpath:vxml/princeWins.webm"/>
+          Your sword defeats the prince!
+        </prompt>
+        <goto next="#Finish"/>
+      <elseif cond="Room4Option == '2' &amp;&amp; spellpower >= 10"/>
+        <prompt>
+          <audio src="classpath:vxml/princeWins.webm"/>
+          Your magic destroys the prince!
+        </prompt>
+        <goto next="#Finish"/>
+      <else/>
+        <prompt>
+          <audio src="classpath:vxml/princeLooses.webm"/>
+          You have no weapon! The prince defeats you.
+        </prompt>
+        <goto next="#GameOver"/>
+      </if>
+    </filled>
+  </form>
+
+  <form id="Finish">
+    <block>
+      <prompt bargein="true">
+        Finally you have found the princess! She is gorgeous!
+        You will live happily ever after! Life is a miracle!
+      </prompt>
+      <exit/>
+    </block>
+  </form>
+
+  <form id="GameOver">
+    <block>
+      <prompt bargein="true">
+        Game over! Thanks for playing!
+      </prompt>
+      <exit/>
+    </block>
+  </form>
+</vxml>

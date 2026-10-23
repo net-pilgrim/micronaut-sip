@@ -7,6 +7,8 @@ import net.pilgrim.vxml.grammar.VxmlGrammarMatcher;
 import net.pilgrim.vxml.loader.DefaultVxmlAudioLoader;
 import net.pilgrim.vxml.loader.VxmlAudioLoader;
 import net.pilgrim.vxml.loader.VxmlDocumentLoader;
+import net.pilgrim.vxml.speech.AsrClient;
+import net.pilgrim.vxml.speech.DefaultAsrClient;
 import net.pilgrim.vxml.speech.ToneGenerator;
 import net.pilgrim.vxml.speech.TtsClient;
 import net.pilgrim.vxml.media.VxmlMedia;
@@ -14,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -46,6 +49,7 @@ public class VxmlSession implements VxmlInterpreter {
     private final VxmlDocumentLoader documentLoader;
     private final VxmlAudioLoader audioLoader;
     private final TtsClient ttsClient;
+    private final AsrClient asrClient;
     private final VxmlGrammarMatcher grammarMatcher;
     private volatile VxmlMedia media;
     private final Runnable onDialogComplete;
@@ -74,6 +78,7 @@ public class VxmlSession implements VxmlInterpreter {
                        VxmlDocumentLoader documentLoader,
                        VxmlAudioLoader audioLoader,
                        TtsClient ttsClient,
+                       AsrClient asrClient,
                        VxmlMedia media,
                        Runnable onDialogComplete) {
         this.callId = Objects.requireNonNull(callId, "callId cannot be null");
@@ -82,10 +87,23 @@ public class VxmlSession implements VxmlInterpreter {
         this.documentLoader = documentLoader != null ? documentLoader : new VxmlDocumentLoader();
         this.audioLoader = audioLoader != null ? audioLoader : new DefaultVxmlAudioLoader();
         this.ttsClient = ttsClient != null ? ttsClient : new net.pilgrim.vxml.speech.DefaultTtsClient();
-        this.grammarMatcher = new VxmlGrammarMatcher();
+        this.asrClient = asrClient != null ? asrClient : new net.pilgrim.vxml.speech.DefaultAsrClient();
+        this.grammarMatcher = new VxmlGrammarMatcher(this.audioLoader);
         this.media = media != null ? media : VxmlMedia.noop();
         this.onDialogComplete = onDialogComplete;
         this.media.setDtmfListener(this::onDtmf);
+        this.media.setAudioInputListener(this::onAudioInput);
+    }
+
+    public VxmlSession(String callId,
+                       VxmlDocument initialDoc,
+                       String initialDocUri,
+                       VxmlDocumentLoader documentLoader,
+                       VxmlAudioLoader audioLoader,
+                       TtsClient ttsClient,
+                       VxmlMedia media,
+                       Runnable onDialogComplete) {
+        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient, null, media, onDialogComplete);
     }
 
     public VxmlSession(String callId,
@@ -95,7 +113,7 @@ public class VxmlSession implements VxmlInterpreter {
                        VxmlAudioLoader audioLoader,
                        TtsClient ttsClient,
                        VxmlMedia media) {
-        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient, media, null);
+        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient, null, media, null);
     }
 
     public VxmlSession(String callId,
@@ -105,7 +123,7 @@ public class VxmlSession implements VxmlInterpreter {
                        VxmlAudioLoader audioLoader,
                        TtsClient ttsClient,
                        VxmlOutputSink outputSink) {
-        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient,
+        this(callId, initialDoc, initialDocUri, documentLoader, audioLoader, ttsClient, null,
                 outputSink, outputSink != null ? outputSink::onDialogComplete : null);
     }
 
@@ -424,6 +442,116 @@ public class VxmlSession implements VxmlInterpreter {
         }
     }
 
+    /**
+     * Handles inbound speech recognition utterances from ASR or test events.
+     */
+    @Override
+    public synchronized void onSpeech(String utterance) {
+        if (state == State.TERMINATED || utterance == null || utterance.isBlank()) {
+            return;
+        }
+
+        LOG.info("Received speech utterance '{}' for Call-ID: {} (activeField: {}, state: {})",
+                utterance, callId, activeField != null ? activeField.getName() : "none", state);
+
+        // Barge-in check: stop audio if currently playing and barge-in allowed
+        if (media != null && media.isAudioPlaying()) {
+            if (media.isBargeInAllowed()) {
+                media.stopAudio();
+            } else {
+                return; // Barge-in not permitted, ignore
+            }
+        }
+
+        cancelNoInputTimer();
+
+        if (activeField == null) {
+            return;
+        }
+
+        GrammarMatchResult result = grammarMatcher.matchVoice(activeField, utterance);
+
+        if (result.isMatch()) {
+            String value = result.getValue();
+            dialogScope.put(activeField.getName(), value);
+            dialogScope.put(activeField.getName() + "$.utterance", utterance);
+            dialogScope.put(activeField.getName() + "$.confidence", 1.0);
+
+            if (result.getNextTarget() != null) {
+                handleGoto(result.getNextTarget());
+                return;
+            }
+
+            if (activeField.getFilled() != null) {
+                FlowControl control = executeExecutables(activeField.getFilled().getExecutables());
+                if (control.isExit()) {
+                    terminate();
+                    return;
+                }
+                if (control.isGoto()) {
+                    handleGoto(control.getGotoTarget());
+                    return;
+                }
+            }
+
+            activeField = null;
+            runFia();
+        } else {
+            LOG.info("Utterance '{}' did not match active field '{}'", utterance, activeField.getName());
+            if (activeField.getNoMatch() != null) {
+                FlowControl control = executeExecutables(activeField.getNoMatch().getExecutables());
+                if (control.isExit()) {
+                    terminate();
+                    return;
+                }
+                if (control.isGoto()) {
+                    handleGoto(control.getGotoTarget());
+                    return;
+                }
+            }
+            // Reprompt active field
+            runFia();
+        }
+    }
+
+    /**
+     * Feeds incoming PCM-16LE audio bytes into the ASR recognizer for the active field grammar.
+     */
+    @Override
+    public void onAudioInput(byte[] pcmAudio) {
+        if (state == State.TERMINATED || pcmAudio == null || pcmAudio.length == 0 || activeField == null) {
+            return;
+        }
+
+        String grammarSpec = resolveActiveGrammarSpec(activeField);
+        asrClient.recognize(pcmAudio, grammarSpec)
+                .subscribe(recognizedText -> {
+                    if (recognizedText != null && !recognizedText.isBlank()) {
+                        onSpeech(recognizedText);
+                    }
+                }, error -> {
+                    LOG.warn("ASR recognition error for Call-ID {}: {}", callId, error.getMessage());
+                });
+    }
+
+    private String resolveActiveGrammarSpec(VxmlField field) {
+        if (field == null) return null;
+        for (VxmlGrammar g : field.getGrammars()) {
+            if (!"dtmf".equalsIgnoreCase(g.getMode())) {
+                if (g.getInlineContent() != null && !g.getInlineContent().isBlank()) {
+                    return g.getInlineContent();
+                }
+                if (g.getSrc() != null && !g.getSrc().isBlank()) {
+                    return g.getSrc();
+                }
+            }
+        }
+        if (field.getType() != null && !field.getType().isBlank()) {
+            return field.getType();
+        }
+        return null;
+    }
+
     private void onNoInput() {
         synchronized (this) {
             if (state == State.TERMINATED || activeField == null) {
@@ -557,6 +685,7 @@ public class VxmlSession implements VxmlInterpreter {
     }
 
     private byte[] renderPrompts(List<VxmlPrompt> prompts) {
+        LOG.info("renderPrompts called with {} prompts", prompts != null ? prompts.size() : 0);
         if (prompts == null || prompts.isEmpty()) {
             return new byte[0];
         }
@@ -567,49 +696,71 @@ public class VxmlSession implements VxmlInterpreter {
                 continue;
             }
 
-            StringBuilder textBuffer = new StringBuilder();
-            for (VxmlPromptContent content : prompt.getContents()) {
-                if (content instanceof VxmlTextContent text) {
-                    textBuffer.append(text.getText());
-                } else if (content instanceof VxmlValue value) {
-                    Object evaluated = eval(value.getExpr());
-                    if (evaluated != null) {
-                        textBuffer.append(evaluated);
+            renderPromptAsync(prompt, out);
+        }
+        byte[] result = out.toByteArray();
+        LOG.info("renderPrompts returning {} bytes", result.length);
+        return result;
+    }
+
+    private void renderPromptAsync(VxmlPrompt prompt, ByteArrayOutputStream out) {
+        StringBuilder textBuffer = new StringBuilder();
+        LOG.info("renderPromptAsync: processing {} content items", prompt.getContents().size());
+        for (VxmlPromptContent content : prompt.getContents()) {
+            LOG.info("Content type: {}", content.getClass().getSimpleName());
+            if (content instanceof VxmlTextContent text) {
+                LOG.info("Text content: '{}'", text.getText());
+                textBuffer.append(text.getText());
+            } else if (content instanceof VxmlValue value) {
+                Object evaluated = eval(value.getExpr());
+                if (evaluated != null) {
+                    textBuffer.append(evaluated);
+                }
+            } else if (content instanceof VxmlAudio audio) {
+                LOG.info("Audio content, textBuffer has {} chars", textBuffer.length());
+                if (textBuffer.length() > 0 && ttsClient != null) {
+                    String text = textBuffer.toString();
+                    LOG.info("Synthesizing TTS for text: '{}'", text);
+                    byte[] pcm = ttsClient.synthesize(text, null, null).block(Duration.ofSeconds(10));
+                    LOG.info("TTS returned {} bytes", pcm != null ? pcm.length : 0);
+                    if (pcm != null && pcm.length > 0) {
+                        out.writeBytes(pcm);
                     }
-                } else if (content instanceof VxmlAudio audio) {
-                    if (textBuffer.length() > 0 && ttsClient != null) {
-                        byte[] pcm = ttsClient.synthesize(textBuffer.toString(), null, null).block();
-                        if (pcm != null && pcm.length > 0) {
-                            out.writeBytes(pcm);
-                        }
-                        textBuffer.setLength(0);
-                    }
-                    String src = audio.getSrc();
-                    if (src == null && audio.getExpr() != null) {
-                        Object evaluated = eval(audio.getExpr());
-                        if (evaluated != null) src = evaluated.toString();
-                    }
-                    if (src != null && !src.isBlank()) {
-                        try {
+                    textBuffer.setLength(0);
+                }
+                String src = audio.getSrc();
+                if (src == null && audio.getExpr() != null) {
+                    Object evaluated = eval(audio.getExpr());
+                    if (evaluated != null) src = evaluated.toString();
+                }
+                if (src != null && !src.isBlank()) {
+                    try {
+                        // shortcut: detect video by extension, upgrade to MIME check when adding more formats
+                        if (src.endsWith(".3gp") || src.endsWith(".mp4") || src.endsWith(".webm")) {
+                            handleVideoFile(src);
+                        } else {
                             byte[] pcm = audioLoader.loadAudio(src);
                             if (pcm != null && pcm.length > 0) {
                                 out.writeBytes(pcm);
                             }
-                        } catch (Exception e) {
-                            LOG.warn("Failed loading prompt audio '{}' for Call-ID: {}", src, callId);
                         }
+                    } catch (Exception e) {
+                        LOG.warn("Failed loading prompt audio '{}' for Call-ID: {}", src, callId);
                     }
                 }
             }
+        }
 
-            if (textBuffer.length() > 0 && ttsClient != null) {
-                byte[] pcm = ttsClient.synthesize(textBuffer.toString(), null, null).block();
-                if (pcm != null && pcm.length > 0) {
-                    out.writeBytes(pcm);
-                }
+        LOG.info("After loop, textBuffer has {} chars, ttsClient is {}", textBuffer.length(), ttsClient != null ? "present" : "null");
+        if (textBuffer.length() > 0 && ttsClient != null) {
+            String text = textBuffer.toString();
+            LOG.info("Synthesizing TTS for remaining text: '{}'", text);
+            byte[] pcm = ttsClient.synthesize(text, null, null).block(Duration.ofSeconds(10));
+            LOG.info("TTS returned {} bytes", pcm != null ? pcm.length : 0);
+            if (pcm != null && pcm.length > 0) {
+                out.writeBytes(pcm);
             }
         }
-        return out.toByteArray();
     }
 
     private boolean isBargeInAllowed(List<VxmlPrompt> prompts) {
@@ -623,6 +774,18 @@ public class VxmlSession implements VxmlInterpreter {
     private long getPromptTimeout(List<VxmlPrompt> prompts) {
         if (prompts == null || prompts.isEmpty()) return 5000L;
         return prompts.get(prompts.size() - 1).getTimeoutMs();
+    }
+
+    private void handleVideoFile(String src) {
+        try {
+            byte[] videoData = audioLoader.loadAudio(src);
+            if (videoData != null && videoData.length > 0 && media != null) {
+                // shortcut: send raw 3gp to client, upgrade to frame extraction when adding codec support
+                media.showVideo(videoData, "video/3gpp");
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed loading video '{}' for Call-ID: {}", src, callId, e);
+        }
     }
 
     private void startNoInputTimer(long timeoutMs) {
@@ -674,6 +837,7 @@ public class VxmlSession implements VxmlInterpreter {
     public void setMedia(VxmlMedia media) {
         this.media = media != null ? media : VxmlMedia.noop();
         this.media.setDtmfListener(this::onDtmf);
+        this.media.setAudioInputListener(this::onAudioInput);
     }
 
     public Runnable getOnDialogComplete() {
@@ -754,6 +918,7 @@ public class VxmlSession implements VxmlInterpreter {
         private VxmlDocumentLoader documentLoader;
         private VxmlAudioLoader audioLoader;
         private TtsClient ttsClient;
+        private AsrClient asrClient;
         private VxmlMedia media;
         private Runnable onDialogComplete;
 
@@ -787,6 +952,11 @@ public class VxmlSession implements VxmlInterpreter {
             return this;
         }
 
+        public Builder asrClient(AsrClient asrClient) {
+            this.asrClient = asrClient;
+            return this;
+        }
+
         public Builder media(VxmlMedia media) {
             this.media = media;
             return this;
@@ -798,7 +968,7 @@ public class VxmlSession implements VxmlInterpreter {
         }
 
         public VxmlSession build() {
-            return new VxmlSession(callId, document, documentUri, documentLoader, audioLoader, ttsClient, media, onDialogComplete);
+            return new VxmlSession(callId, document, documentUri, documentLoader, audioLoader, ttsClient, asrClient, media, onDialogComplete);
         }
     }
 

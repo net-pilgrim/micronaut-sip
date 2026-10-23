@@ -20,17 +20,18 @@ public class MockMistralAudioClient implements MistralAudioClient {
     private static final Logger LOG = LoggerFactory.getLogger(MockMistralAudioClient.class);
     private static final int SAMPLE_RATE = 8000;
 
-    private final ConcurrentMap<String, String> grammarKeywordMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> defaultKeywordMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> customKeywordMap = new ConcurrentHashMap<>();
     private volatile String defaultRecognizedText = "hello mistral";
     private volatile float defaultConfidence = 0.95f;
 
     public MockMistralAudioClient() {
-        grammarKeywordMap.put("yes", "yes");
-        grammarKeywordMap.put("no", "no");
-        grammarKeywordMap.put("help", "help");
-        grammarKeywordMap.put("sales", "sales");
-        grammarKeywordMap.put("support", "support");
-        grammarKeywordMap.put("operator", "operator");
+        defaultKeywordMap.put("yes", "yes");
+        defaultKeywordMap.put("no", "no");
+        defaultKeywordMap.put("help", "help");
+        defaultKeywordMap.put("sales", "sales");
+        defaultKeywordMap.put("support", "support");
+        defaultKeywordMap.put("operator", "operator");
     }
 
     public void setDefaultRecognizedText(String text, float confidence) {
@@ -40,7 +41,7 @@ public class MockMistralAudioClient implements MistralAudioClient {
 
     public void mapGrammarKeyword(String keyword, String recognizedText) {
         if (keyword != null && recognizedText != null) {
-            grammarKeywordMap.put(keyword.toLowerCase(java.util.Locale.ROOT), recognizedText);
+            customKeywordMap.put(keyword.toLowerCase(java.util.Locale.ROOT), recognizedText);
         }
     }
 
@@ -79,12 +80,46 @@ public class MockMistralAudioClient implements MistralAudioClient {
 
             if (grammar != null && !grammar.isBlank()) {
                 String gLower = grammar.toLowerCase(java.util.Locale.ROOT);
-                for (var entry : grammarKeywordMap.entrySet()) {
-                    if (gLower.contains(entry.getKey())) {
-                        List<String> nBest = new ArrayList<>();
-                        nBest.add(entry.getValue());
-                        return new MistralRecognitionResult(entry.getValue(), 0.98f, language != null ? language : "en-US", nBest);
+
+                // 1. Check custom keywords first
+                String bestCustomMatch = null;
+                int bestCustomPos = Integer.MAX_VALUE;
+                for (var entry : customKeywordMap.entrySet()) {
+                    int pos = gLower.indexOf(entry.getKey());
+                    if (pos != -1 && pos < bestCustomPos) {
+                        bestCustomPos = pos;
+                        bestCustomMatch = entry.getValue();
                     }
+                }
+                if (bestCustomMatch != null) {
+                    List<String> nBest = new ArrayList<>();
+                    nBest.add(bestCustomMatch);
+                    return new MistralRecognitionResult(bestCustomMatch, 0.98f, language != null ? language : "en-US", nBest);
+                }
+
+                // 2. Check default keywords in order of appearance in grammar
+                String bestDefaultMatch = null;
+                int bestDefaultPos = Integer.MAX_VALUE;
+                for (var entry : defaultKeywordMap.entrySet()) {
+                    int pos = gLower.indexOf(entry.getKey());
+                    if (pos != -1 && pos < bestDefaultPos) {
+                        bestDefaultPos = pos;
+                        bestDefaultMatch = entry.getValue();
+                    }
+                }
+                if (bestDefaultMatch != null) {
+                    List<String> nBest = new ArrayList<>();
+                    nBest.add(bestDefaultMatch);
+                    return new MistralRecognitionResult(bestDefaultMatch, 0.98f, language != null ? language : "en-US", nBest);
+                }
+
+                // Check for first <item> or token in SRGS grammar
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("<item[^>]*>([^<]+?)(?:<tag>[^<]*</tag>)?</item>").matcher(grammar);
+                if (m.find()) {
+                    String matchedWord = m.group(1).trim();
+                    List<String> nBest = new ArrayList<>();
+                    nBest.add(matchedWord);
+                    return new MistralRecognitionResult(matchedWord, 0.95f, language != null ? language : "en-US", nBest);
                 }
             }
 
