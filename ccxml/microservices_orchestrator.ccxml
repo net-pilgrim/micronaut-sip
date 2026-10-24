@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    W3C CCXML 1.0 Call Orchestration Scenario for Decoupled Microservice Containers:
+    - SIP Proxy: Ingress call routing and perimeter security
+    - CCXML Server: Call Controller & B2BUA Orchestrator (:micronaut-ccxml)
+    - MSML Media Server: RTP streamer, recorder, and mixer (:micronaut-msml + :micronaut-rtp)
+    - VXML Interpreter: Interactive VoiceXML dialog execution (:micronaut-vxml)
+    - MRCP Server: Speech Recognition (ASR) & Text-To-Speech (TTS) (:micronaut-mrcp)
+-->
+<ccxml version="1.0" xmlns="http://www.w3.org/2002/09/ccxml">
+
+    <!-- ================================================================== -->
+    <!-- 1. Call Leg Identifiers & Dialog References                        -->
+    <!-- ================================================================== -->
+    <var name="callerLeg"/>
+    <var name="msmlLeg"/>
+    <var name="vxmlDialog"/>
+    <var name="operatorLeg"/>
+    <var name="callerAni"/>
+
+    <!-- ================================================================== -->
+    <!-- 2. Microservice Container Service Discovery Endpoints              -->
+    <!-- ================================================================== -->
+    <var name="msmlServiceUri" expr="'sip:msml@msml-media-server.internal:5060'"/>
+    <var name="vxmlServiceUri" expr="'http://vxml-interpreter.internal:8080/voicemail.vxml'"/>
+    <var name="mrcpServiceUri" expr="'mrcp://mrcp-speech-server.internal:4900'"/>
+
+    <!-- Event Processor State Machine -->
+    <eventprocessor statevariable="callState">
+
+        <!-- ============================================================== -->
+        <!-- Step 1: Inbound Call Arrival from SIP Proxy                    -->
+        <!-- ============================================================== -->
+        <transition event="connection.alerting" state="init">
+            <!-- Capture caller connection ID and caller ANI -->
+            <assign name="callerLeg" expr="event$.connectionid"/>
+            <assign name="callerAni" expr="event$.connection.remote"/>
+
+            <!-- Send 200 OK / Accept incoming call leg -->
+            <accept connectionid="callerLeg"/>
+            <assign name="callState" expr="'caller_accepted'"/>
+        </transition>
+
+        <!-- ============================================================== -->
+        <!-- Step 2: Caller Connected -> Invite MSML Media Streamer Leg     -->
+        <!-- ============================================================== -->
+        <transition event="connection.connected" state="caller_accepted">
+            <!-- Invite the dedicated MSML Media Server container to allocate RTP pipeline -->
+            <createcall dest="msmlServiceUri" 
+                        callerid="callerAni" 
+                        connectionid="msmlLeg"/>
+            <assign name="callState" expr="'connecting_msml'"/>
+        </transition>
+
+        <!-- ============================================================== -->
+        <!-- Step 3: MSML Leg Connected -> Join Media & Delegate to VXML    -->
+        <!-- ============================================================== -->
+        <transition event="connection.connected" state="connecting_msml">
+            <!-- Bridge Caller RTP audio directly to MSML Media Server (Full Duplex) -->
+            <join id1="callerLeg" id2="msmlLeg" duplex="full"/>
+
+            <!-- Start VoiceXML Dialog on the VXML Interpreter container -->
+            <!-- CCXML passes the MRCP Speech Server endpoint and MSML leg ID to VXML -->
+            <dialogstart src="vxmlServiceUri"
+                         dialogid="vxmlDialog"
+                         connectionid="callerLeg"
+                         namelist="mrcpServiceUri msmlLeg callerAni"/>
+            <assign name="callState" expr="'dialog_active'"/>
+        </transition>
+
+        <!-- ============================================================== -->
+        <!-- Step 4: Mid-Dialog User Event: Operator Escalation             -->
+        <!-- ============================================================== -->
+        <transition event="dialog.user.transfer" state="dialog_active">
+            <!-- VoiceXML collected caller request to speak with a human agent -->
+            <!-- Detach caller from media streamer -->
+            <unjoin id1="callerLeg" id2="msmlLeg"/>
+            <disconnect connectionid="msmlLeg"/>
+
+            <!-- Dial human agent or hunt group -->
+            <createcall dest="event$.values.target" connectionid="operatorLeg"/>
+            <assign name="callState" expr="'calling_operator'"/>
+        </transition>
+
+        <transition event="connection.connected" state="calling_operator">
+            <!-- Bridge caller directly to human operator leg -->
+            <join id1="callerLeg" id2="operatorLeg" duplex="full"/>
+            <assign name="callState" expr="'operator_connected'"/>
+        </transition>
+
+        <!-- ============================================================== -->
+        <!-- Step 5: Dialog Exit (Voicemail Deposited or Call Completed)   -->
+        <!-- ============================================================== -->
+        <transition event="dialog.exit" state="dialog_active">
+            <!-- VoiceXML script finished executing -->
+            <unjoin id1="callerLeg" id2="msmlLeg"/>
+            <disconnect connectionid="callerLeg"/>
+            <disconnect connectionid="msmlLeg"/>
+            <assign name="callState" expr="'completed'"/>
+            <exit/>
+        </transition>
+
+        <!-- ============================================================== -->
+        <!-- Step 6: Mid-Call Disconnect Handling                           -->
+        <!-- ============================================================== -->
+        <transition event="connection.disconnected">
+            <!-- Terminate dialog if active -->
+            <dialogterminate dialogid="vxmlDialog"/>
+            
+            <!-- Clean up all active legs -->
+            <disconnect connectionid="callerLeg"/>
+            <disconnect connectionid="msmlLeg"/>
+            <disconnect connectionid="operatorLeg"/>
+            <assign name="callState" expr="'terminated'"/>
+            <exit/>
+        </transition>
+
+        <!-- ============================================================== -->
+        <!-- Step 7: Fail-safe Error Recovery                               -->
+        <!-- ============================================================== -->
+        <transition event="error.*">
+            <disconnect connectionid="callerLeg"/>
+            <disconnect connectionid="msmlLeg"/>
+            <assign name="callState" expr="'error'"/>
+            <exit/>
+        </transition>
+
+    </eventprocessor>
+</ccxml>
